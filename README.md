@@ -32,6 +32,19 @@ Open <http://localhost:8000/__/>.
 
 See [docs/deploy-podman.md](docs/deploy-podman.md) for auto-start, updates and backups.
 
+### With docker
+
+```bash
+mkdir -p ~/lambdock && cd ~/lambdock
+curl -O https://raw.githubusercontent.com/jotoh98/lambdock/main/compose.docker.yaml
+docker compose -f compose.docker.yaml up -d
+```
+
+The image is public. No `docker login` is necessary.
+
+On Linux the container writes the files in `./data` as root. Remove the comment marks on the `user:`
+line in the file to get your own ids. Docker Desktop on macOS and Windows does this for you.
+
 ### From source
 
 ```bash
@@ -148,6 +161,16 @@ data/
 
 Copy this directory to make a backup. Writes go through a temporary file and a rename, so a crash
 cannot leave a half-written file.
+
+## Compose files
+
+| File                  | Use                                                        |
+| --------------------- | ---------------------------------------------------------- |
+| `compose.yaml`        | podman, pulls the published image (adds the SELinux label) |
+| `compose.docker.yaml` | docker, pulls the published image                          |
+| `compose.dev.yaml`    | builds the image from this checkout                        |
+
+All three mount `./data`, so your functions survive a reboot and an image update.
 
 ## Configuration
 

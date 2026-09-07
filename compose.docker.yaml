@@ -1,0 +1,39 @@
+# Docker example. Runs the published image from the GitHub container registry.
+#
+#   docker compose -f compose.docker.yaml up -d
+#
+# The image is public, so no `docker login` is necessary.
+# For podman use compose.yaml instead. It is the same, plus the SELinux label.
+services:
+  lambdock:
+    image: ghcr.io/jotoh98/lambdock:latest
+    container_name: lambdock
+    ports:
+      - "8000:8000"
+    volumes:
+      # Functions and their data survive a reboot and an image update.
+      # Use a bind mount if you want to edit the files with your own editor.
+      - ./data:/data
+      # Or use a named volume, if only the editor writes the files:
+      # - lambdock-data:/data
+    environment:
+      LAMBDOCK_DATA: /data
+      LAMBDOCK_PORT: "8000"
+      # Set to 0 to switch off `deno check` in the editor.
+      LAMBDOCK_TYPECHECK: "1"
+    restart: unless-stopped
+
+    # The container runs as root. On Linux, the files in ./data then belong to
+    # root, and you cannot edit them with your own editor. To prevent that,
+    # give your own ids here, and make the directory first:
+    #
+    #   mkdir -p data && sudo chown -R $(id -u):$(id -g) data
+    #
+    # user: "1000:1000"
+    #
+    # Docker Desktop on macOS and Windows maps the files to you automatically.
+    # There you do not need this.
+
+# Remove the comment marks if you use the named volume above.
+# volumes:
+#   lambdock-data:
