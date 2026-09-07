@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>lambdock</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#955;</text></svg>">
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <div class="brand">&lambda; lam<span>dock</span></div>
+        <div class="base" id="baseUrl">—</div>
+        <div class="spacer"></div>
+        <button id="btnEnv">Env</button>
+        <button id="btnHelp">Help</button>
+      </header>
+
+      <main>
+        <aside>
+          <div class="aside-head">
+            <h2>Functions</h2>
+            <button id="btnNew" title="New function">+</button>
+          </div>
+          <div class="fn-list" id="fnList"></div>
+          <div class="aside-foot">
+            <button id="btnRename" disabled>Rename</button>
+            <button id="btnDelete" class="danger" disabled>Delete</button>
+          </div>
+        </aside>
+
+        <section class="pane" id="pane">
+          <div class="toolbar">
+            <span class="slug" id="curSlug">—</span>
+            <span class="status" id="status"></span>
+            <div class="spacer"></div>
+            <label
+              style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--fg-dim)">
+          <input type="checkbox" id="chkEnabled" style="width:14px;height:14px"> enabled
+        </label>
+            <button id="btnSave" class="primary"
+              disabled>Save <span style="opacity:.65">&#8984;S</span></button>
+          </div>
+
+          <div class="editor-wrap" id="editorWrap">
+            <textarea id="fallback" spellcheck="false" hidden></textarea>
+          </div>
+
+          <div class="splitter" id="splitter"></div>
+
+          <div class="panel">
+            <div class="tabs">
+              <div class="tab active" data-tab="routes">Routes</div>
+              <div class="tab" data-tab="test">Test</div>
+              <div class="tab" data-tab="logs">Logs</div>
+              <div class="tab"
+                data-tab="problems">Problems<span class="badge" id="probBadge" hidden>0</span></div>
+              <div class="spacer"></div>
+              <button id="btnClearLogs" style="padding:3px 9px;font-size:12px">Clear logs</button>
+            </div>
+            <div class="panel-body" id="panelBody"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="dlg">
+      <h3 id="dlgTitle"></h3>
+      <div class="body" id="dlgBody"></div>
+      <div class="foot" id="dlgFoot"></div>
+    </dialog>
+
+    <div id="toast"></div>
+
+    <script src="vendor/editor.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

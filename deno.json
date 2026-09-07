@@ -1,0 +1,38 @@
+{
+  "name": "lambdock",
+  "version": "0.1.0",
+  "exports": "./src/main.ts",
+  "tasks": {
+    "dev": "deno run --watch=src,ui --allow-net --allow-read --allow-write --allow-env --allow-run --unstable-kv src/main.ts",
+    "start": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run --unstable-kv src/main.ts",
+    "build:editor": "deno bundle --platform browser --minify -o ui/vendor/editor.js scripts/editor-entry.ts",
+    "check": "deno check src/main.ts",
+    "fmt": "deno fmt",
+    "test": "deno test --allow-net --allow-read --allow-write --allow-env --allow-run --unstable-kv",
+    "lint": "deno lint"
+  },
+  "imports": {
+    "@std/path": "jsr:@std/path@^1.0.8",
+    "@std/media-types": "jsr:@std/media-types@^1.1.0",
+    "@std/assert": "jsr:@std/assert@^1.0.10",
+    "codemirror": "npm:codemirror@^6.0.1",
+    "@codemirror/lang-javascript": "npm:@codemirror/lang-javascript@^6.2.2",
+    "@codemirror/theme-one-dark": "npm:@codemirror/theme-one-dark@^6.1.2",
+    "@codemirror/view": "npm:@codemirror/view@^6.34.1",
+    "@codemirror/commands": "npm:@codemirror/commands@^6.7.1",
+    "@codemirror/state": "npm:@codemirror/state@^6.5.0"
+  },
+  "fmt": {
+    "lineWidth": 100
+  },
+  "compilerOptions": {
+    "lib": [
+      "deno.window",
+      "deno.unstable"
+    ]
+  },
+  "exclude": [
+    "data",
+    "ui/vendor"
+  ]
+}

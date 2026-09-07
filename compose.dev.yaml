@@ -1,0 +1,14 @@
+# Builds the image from this checkout instead of pulling it.
+#   podman-compose -f compose.dev.yaml up --build
+services:
+  lambdock:
+    build: .
+    image: lambdock:dev
+    container_name: lambdock-dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data:Z
+    environment:
+      LAMBDOCK_DATA: /data
+    restart: unless-stopped

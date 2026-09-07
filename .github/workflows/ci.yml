@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format
+        run: deno fmt --check
+
+      - name: Lint
+        run: deno lint
+
+      - name: Type check
+        run: deno check src/main.ts
+
+      - name: Test
+        run: deno task test
+
+      - name: Editor bundle builds
+        run: deno task build:editor
+
+  image:
+    name: image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: lambdock:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          docker run -d --name lambdock -p 8000:8000 lambdock:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/__/api/health && break
+            sleep 1
+          done
+          curl -fsS http://localhost:8000/hello/ci | grep ci
+          curl -fsS -o /dev/null http://localhost:8000/__/
+          docker rm -f lambdock

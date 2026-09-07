@@ -1,0 +1,18 @@
+# Runs the published image from the GitHub container registry.
+#   podman-compose up -d
+# The image is public: no registry login is needed.
+services:
+  lambdock:
+    image: ghcr.io/jotoh98/lambdock:latest
+    container_name: lambdock
+    ports:
+      - "8000:8000"
+    volumes:
+      # Functions and their data survive a reboot and an image update.
+      - ./data:/data:Z
+    environment:
+      LAMBDOCK_DATA: /data
+      LAMBDOCK_PORT: "8000"
+      # Set to 0 to switch off `deno check` in the editor.
+      LAMBDOCK_TYPECHECK: "1"
+    restart: unless-stopped
