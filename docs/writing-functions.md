@@ -236,6 +236,12 @@ detail. Catch your own errors if that matters.
 If the **module** cannot load, every request to that function gives 500 with
 `function_failed_to_load`. The other functions continue to work.
 
+Code at the top of the module runs one time, at load, with no request around it. A synchronous error
+there stops the load and gives `function_failed_to_load`. A promise that the module starts but does
+not await fails later: the server catches it, writes it to the Logs tab of that function, and keeps
+serving. Do not do work at module level that belongs in the handler — a script that you paste in
+often ends with a call such as `main()`, and that call runs at load, not per request.
+
 ## Import other files
 
 Put helper files beside `handler.ts`:

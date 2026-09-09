@@ -1,5 +1,6 @@
 import { config, paths } from "./config.ts";
 import { installConsoleCapture } from "./console.ts";
+import { installCrashGuard } from "./guard.ts";
 import { handleAdmin } from "./admin.ts";
 import { closeKv, openKv } from "./kv.ts";
 import * as registry from "./registry.ts";
@@ -90,6 +91,7 @@ async function watchFunctions() {
 }
 
 if (import.meta.main) {
+  installCrashGuard();
   installConsoleCapture();
   await store.init();
   const seeded = await store.seedExamples();
