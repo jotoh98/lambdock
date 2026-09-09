@@ -8,6 +8,8 @@ const { handle } = await import("./main.ts");
 const store = await import("./store.ts");
 const registry = await import("./registry.ts");
 const { closeKv } = await import("./kv.ts");
+const logs = await import("./logs.ts");
+const { installCrashGuard, slugFromStack } = await import("./guard.ts");
 
 await store.init();
 
@@ -154,6 +156,27 @@ Deno.test("the root path redirects to the editor", async () => {
   const res = await req("/");
   assertEquals(res.status, 302);
   assert(res.headers.get("location")?.endsWith("/__/"));
+});
+
+Deno.test("a late failure in a function does not stop the server", async () => {
+  installCrashGuard();
+  await store.createFn(
+    "latefail",
+    src(`Promise.reject(new Error("boom"));
+export default () => "ok";`),
+  );
+  await registry.load("latefail");
+  await new Promise((r) => setTimeout(r, 50)); // let the rejection reach the event loop
+
+  assertEquals(await (await req("/latefail")).text(), "ok");
+  assertEquals((await req("/greet/ada")).status, 200);
+  assert(logs.recent("latefail").some((l) => l.text.includes("boom")));
+});
+
+Deno.test("a stack trace names the function it came from", () => {
+  const inside = `at file://${tmp}/functions/latefail/handler.ts?v=1:1:9`;
+  assertEquals(slugFromStack(inside), "latefail");
+  assertEquals(slugFromStack("at file:///src/main.ts:1:1"), null);
 });
 
 Deno.test("cleanup", () => {
