@@ -8,10 +8,10 @@ export interface CheckResult {
 }
 
 /**
- * Runs `deno check` on a handler in a subprocess.
+ * Runs `deno check` on one file in a subprocess.
  * It needs --allow-run. When that is missing the check is skipped, not fatal.
  */
-export async function checkFunction(slug: string): Promise<CheckResult> {
+export async function checkFile(file: string): Promise<CheckResult> {
   if (!config.typeCheck) {
     return { ok: true, output: "", skipped: "disabled by LAMBDOCK_TYPECHECK=0" };
   }
@@ -19,7 +19,7 @@ export async function checkFunction(slug: string): Promise<CheckResult> {
     const cmd = new Deno.Command(Deno.execPath(), {
       // --no-config: the check must not inherit the server's deno.json,
       // which excludes the data directory and would silently skip the file.
-      args: ["check", "--no-lock", "--no-config", "--quiet", paths.handler(slug)],
+      args: ["check", "--no-lock", "--no-config", "--quiet", file],
       env: { NO_COLOR: "1" },
       stdout: "piped",
       stderr: "piped",
@@ -44,4 +44,14 @@ export async function checkFunction(slug: string): Promise<CheckResult> {
         : String(e instanceof Error ? e.message : e),
     };
   }
+}
+
+/** Checks the draft of a function. */
+export function checkFunction(slug: string): Promise<CheckResult> {
+  return checkFile(paths.handler(slug));
+}
+
+/** Checks one published version. */
+export function checkVersion(slug: string, version: number): Promise<CheckResult> {
+  return checkFile(paths.versionHandler(slug, version));
 }

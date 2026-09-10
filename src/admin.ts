@@ -5,7 +5,10 @@ import * as store from "./store.ts";
 import * as registry from "./registry.ts";
 import * as logs from "./logs.ts";
 import { dropNamespace } from "./kv.ts";
-import { checkFunction } from "./typecheck.ts";
+import { checkFunction, checkVersion } from "./typecheck.ts";
+import { runTests, runVersionTests } from "./tests.ts";
+import { invoke } from "./runtime.ts";
+import type { GateResult } from "./store.ts";
 
 const UI_ROOT = new URL("../ui/", import.meta.url);
 
@@ -24,6 +27,10 @@ function dto(entry: registry.FnEntry) {
     description: entry.description,
     updatedAt: entry.meta.updatedAt,
     error: entry.error,
+    /** The version that answers requests, or null for a function with a draft only. */
+    liveVersion: entry.meta.liveVersion,
+    live: entry.live,
+    versions: entry.meta.versions.length,
     routes: entry.routes.map((r) => ({
       method: r.method,
       path: r.path,
@@ -32,10 +39,28 @@ function dto(entry: registry.FnEntry) {
   };
 }
 
+/** The same fields plus one filesystem read: does the draft differ from the live version? */
+async function fullDto(entry: registry.FnEntry) {
+  return { ...dto(entry), draftAhead: await store.draftIsAhead(entry.slug) };
+}
+
 async function reloadAndDescribe(slug: string) {
   const entry = await registry.load(slug);
   const check = await checkFunction(slug);
-  return { ...dto(entry), check };
+  return { ...await fullDto(entry), check };
+}
+
+/** Reads `target` from the request. Default: the draft. */
+function targetOf(req: Request, url = new URL(req.url)): registry.Target {
+  const raw = req.headers.get("x-lambdock-target") ?? url.searchParams.get("__target") ?? "draft";
+  if (raw === "draft" || raw === "live") return raw;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new TypeError(`Bad target: ${raw}`);
+  return n;
+}
+
+function label(target: registry.Target): string {
+  return target === "draft" ? "[draft]" : target === "live" ? "[live]" : `[v${target}]`;
 }
 
 /** Sends the log stream to the editor with server-sent events. */
@@ -106,15 +131,22 @@ const route = (
   run: (m: URLPatternResult, req: Request) => Promise<Response> | Response,
 ) => api.push({ method, pattern: new URLPattern({ pathname: path }), run });
 
+const slugOf = (m: URLPatternResult) => m.pathname.groups.slug!;
+
+async function need(slug: string): Promise<Response | null> {
+  return (await store.hasFn(slug)) ? null : fail("not found", 404);
+}
+
 route("GET", "/health", () => json({ ok: true, functions: registry.all().length }));
 
 route("GET", "/state", async () => {
   return json({
-    functions: registry.all().map(dto),
+    functions: await Promise.all(registry.all().map(fullDto)),
     env: await store.readEnv(),
     server: {
       adminPrefix: config.adminPrefix,
       typeCheck: config.typeCheck,
+      runTests: config.runTests,
       defaultTimeoutMs: config.defaultTimeoutMs,
       dataDir: config.dataDir,
     },
@@ -122,34 +154,55 @@ route("GET", "/state", async () => {
 });
 
 route("POST", "/functions", async (_m, req) => {
-  const { slug } = await req.json() as { slug?: string };
-  if (!slug) return fail("slug is required");
-  const invalid = store.validateSlug(slug);
+  const body = await req.json() as {
+    slug?: string;
+    source?: string;
+    tests?: string;
+    publish?: boolean;
+  };
+  if (!body.slug) return fail("slug is required");
+  const invalid = store.validateSlug(body.slug);
   if (invalid) return fail(invalid);
-  if (await store.hasFn(slug)) return fail(`Function "${slug}" already exists.`, 409);
-  await store.createFn(slug, await store.newFunctionTemplate());
-  return json(await reloadAndDescribe(slug), 201);
+  if (await store.hasFn(body.slug)) return fail(`Function "${body.slug}" already exists.`, 409);
+  await store.createFn(body.slug, body.source ?? await store.newFunctionTemplate(), {
+    tests: body.tests ?? (body.source ? undefined : await store.newTestTemplate()),
+    publish: body.publish,
+  });
+  return json(await reloadAndDescribe(body.slug), 201);
 });
 
 route("GET", "/functions/:slug", async (m) => {
-  const slug = m.pathname.groups.slug!;
-  if (!(await store.hasFn(slug))) return fail("not found", 404);
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
   const entry = await registry.get(slug);
-  return json({ ...dto(entry!), source: await store.readSource(slug) });
+  const meta = await store.readMeta(slug);
+  return json({
+    ...await fullDto(entry!),
+    source: await store.readSource(slug),
+    tests: await store.readTests(slug),
+    versionList: meta.versions,
+  });
 });
 
+/** A save writes the draft. The live route does not change. */
 route("PUT", "/functions/:slug", async (m, req) => {
-  const slug = m.pathname.groups.slug!;
-  if (!(await store.hasFn(slug))) return fail("not found", 404);
-  const { source } = await req.json() as { source?: string };
-  if (typeof source !== "string") return fail("source is required");
-  await store.writeSource(slug, source);
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
+  const body = await req.json() as { source?: string; tests?: string | null };
+  if (typeof body.source !== "string" && body.tests === undefined) {
+    return fail("source or tests is required");
+  }
+  if (typeof body.source === "string") await store.writeSource(slug, body.source);
+  if (body.tests !== undefined) await store.writeTests(slug, body.tests);
   return json(await reloadAndDescribe(slug));
 });
 
 route("DELETE", "/functions/:slug", async (m) => {
-  const slug = m.pathname.groups.slug!;
-  if (!(await store.hasFn(slug))) return fail("not found", 404);
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
   await store.deleteFn(slug);
   await dropNamespace(slug);
   registry.forget(slug);
@@ -158,12 +211,13 @@ route("DELETE", "/functions/:slug", async (m) => {
 });
 
 route("POST", "/functions/:slug/rename", async (m, req) => {
-  const from = m.pathname.groups.slug!;
+  const from = slugOf(m);
   const { to } = await req.json() as { to?: string };
   if (!to) return fail("to is required");
   const invalid = store.validateSlug(to);
   if (invalid) return fail(invalid);
-  if (!(await store.hasFn(from))) return fail("not found", 404);
+  const missing = await need(from);
+  if (missing) return missing;
   if (await store.hasFn(to)) return fail(`Function "${to}" already exists.`, 409);
   await store.renameFn(from, to);
   registry.forget(from);
@@ -172,23 +226,180 @@ route("POST", "/functions/:slug/rename", async (m, req) => {
 });
 
 route("POST", "/functions/:slug/enabled", async (m, req) => {
-  const slug = m.pathname.groups.slug!;
-  if (!(await store.hasFn(slug))) return fail("not found", 404);
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
   const { enabled } = await req.json() as { enabled?: boolean };
   await store.setEnabled(slug, enabled !== false);
   return json(await reloadAndDescribe(slug));
 });
 
-route("POST", "/functions/:slug/check", async (m) => {
-  const slug = m.pathname.groups.slug!;
-  if (!(await store.hasFn(slug))) return fail("not found", 404);
-  return json(await checkFunction(slug));
+/* ------------------------------------------------------------ gate ---- */
+
+route("POST", "/functions/:slug/check", async (m, req) => {
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
+  const target = targetOf(req);
+  return json(
+    target === "draft"
+      ? await checkFunction(slug)
+      : await checkVersion(slug, versionOf(target, await store.readMeta(slug))),
+  );
 });
 
-route("GET", "/functions/:slug/logs", (m) => json(logs.recent(m.pathname.groups.slug!)));
+route("POST", "/functions/:slug/test", async (m, req) => {
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
+  const target = targetOf(req);
+  const meta = await store.readMeta(slug);
+  const result = target === "draft"
+    ? await runTests(slug)
+    : await runVersionTests(slug, versionOf(target, meta));
+  return json({ target, ...result });
+});
+
+/* -------------------------------------------------------- versions ---- */
+
+route("GET", "/functions/:slug/versions", async (m) => {
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
+  const meta = await store.readMeta(slug);
+  return json({
+    liveVersion: meta.liveVersion,
+    draftAhead: await store.draftIsAhead(slug),
+    versions: meta.versions,
+  });
+});
+
+/**
+ * Creates a version from the current draft and makes it live.
+ * The type check and the tests run first. `force` publishes in spite of them.
+ */
+route("POST", "/functions/:slug/versions", async (m, req) => {
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
+  const body = await req.json().catch(() => ({})) as { note?: string; force?: boolean };
+
+  const check = await checkFunction(slug);
+  const tests = await runTests(slug);
+  if (!body.force && !check.ok) return json({ error: "check_failed", check, tests }, 422);
+  if (!body.force && !tests.ok) return json({ error: "tests_failed", check, tests }, 422);
+
+  const gate = (ok: boolean, skipped: string | undefined, none = false): GateResult =>
+    !ok ? "forced" : none ? "none" : skipped ? "skipped" : "passed";
+
+  const version = await store.createVersion(slug, {
+    note: body.note,
+    check: gate(check.ok, check.skipped),
+    tests: gate(tests.ok, tests.skipped, tests.skipped === "no test file"),
+  });
+  const entry = await registry.load(slug);
+  return json({ ...await fullDto(entry), version, check, tests }, 201);
+});
+
+route("GET", "/functions/:slug/versions/:version", async (m) => {
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
+  const n = Number(m.pathname.groups.version);
+  const meta = await store.readMeta(slug);
+  const found = meta.versions.find((v) => v.version === n);
+  if (!found) return fail(`Version ${n} does not exist.`, 404);
+  // `version` stays nested: VersionMeta.tests is a gate result, and `tests`
+  // at the top level is the test source.
+  return json({
+    version: found,
+    live: meta.liveVersion === n,
+    source: await store.readVersionSource(slug, n),
+    tests: await store.readVersionTests(slug, n),
+  });
+});
+
+/** Points the live route at a version that already exists. */
+route("POST", "/functions/:slug/live", async (m, req) => {
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
+  const { version } = await req.json() as { version?: number };
+  if (typeof version !== "number") return fail("version is required");
+  try {
+    await store.setLiveVersion(slug, version);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e), 404);
+  }
+  return json(await reloadAndDescribe(slug));
+});
+
+/* ---------------------------------------------------------- invoke ---- */
+
+/**
+ * Runs a function without publishing it. The method, headers and body are
+ * taken from this request, and the path after `/invoke` is the function path.
+ * `x-lambdock-target: draft | live | <n>` chooses what runs. Default: the draft.
+ */
+async function runTarget(m: URLPatternResult, req: Request): Promise<Response> {
+  const slug = slugOf(m);
+  const missing = await need(slug);
+  if (missing) return missing;
+
+  const url = new URL(req.url);
+  let target: registry.Target;
+  try {
+    target = targetOf(req, url);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
+  }
+
+  let entry: registry.FnEntry;
+  try {
+    entry = await registry.loadTarget(slug, target);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e), 404);
+  }
+  if (entry.error) {
+    return json({ error: "function_failed_to_load", function: slug, detail: entry.error }, 500);
+  }
+
+  const rest = m.pathname.groups["0"] ?? "";
+  const path = "/" + rest.replace(/^\/+/, "");
+  const match = registry.matchRoute(entry, req.method, path);
+  if (!match) {
+    return json({
+      error: "no_matching_route",
+      function: slug,
+      path,
+      method: req.method,
+      routes: entry.routes.map((r) => `${r.method} ${r.path}`),
+    }, 404);
+  }
+
+  // Give the handler a URL that looks like the public one.
+  const inner = new URL(`/${slug}${path === "/" ? "" : path}`, url.origin);
+  for (const [k, v] of url.searchParams) if (k !== "__target") inner.searchParams.append(k, v);
+  const res = await invoke(
+    match,
+    new Request(inner, { method: req.method, headers: req.headers, body: req.body }),
+    path,
+    label(target),
+  );
+  const headers = new Headers(res.headers);
+  headers.set("x-lambdock-target", String(target));
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+route("*", "/functions/:slug/invoke", runTarget);
+route("*", "/functions/:slug/invoke/*", runTarget);
+
+/* ------------------------------------------------------------ logs ---- */
+
+route("GET", "/functions/:slug/logs", (m) => json(logs.recent(slugOf(m))));
 
 route("DELETE", "/functions/:slug/logs", (m) => {
-  logs.clear(m.pathname.groups.slug!);
+  logs.clear(slugOf(m));
   return json({ ok: true });
 });
 
@@ -207,12 +418,19 @@ route("PUT", "/env", async (_m, req) => {
   return json(out);
 });
 
+/** Resolves "live" to a number. Throws when nothing is published. */
+function versionOf(target: registry.Target, meta: store.FnMeta): number {
+  if (typeof target === "number") return target;
+  if (meta.liveVersion === null) throw new Deno.errors.NotFound("No version is published.");
+  return meta.liveVersion;
+}
+
 /** Handles every request below the admin prefix. */
 export async function handleAdmin(req: Request, path: string): Promise<Response> {
   if (path.startsWith("/api")) {
     const apiPath = path.slice("/api".length) || "/";
     for (const r of api) {
-      if (r.method !== req.method) continue;
+      if (r.method !== "*" && r.method !== req.method) continue;
       const m = r.pattern.exec({ pathname: apiPath });
       if (!m) continue;
       try {

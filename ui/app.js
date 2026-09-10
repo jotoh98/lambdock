@@ -11,21 +11,28 @@
     server: {},
     env: {},
     slug: null,
-    saved: "",
     dirty: false,
     tab: "routes",
     logs: [],
     test: {}, // per-slug request draft
     lastResponse: null,
     problems: "",
+    /** Which draft file the editor shows: "handler" or "tests". */
+    file: "handler",
+    /** Text of both draft files, and the text the server holds. */
+    buffers: { handler: "", tests: "" },
+    savedBuffers: { handler: "", tests: "" },
+    /** Last `deno test` run of this function. */
+    testRun: null,
+    versions: null,
   };
 
   /* ---------------- helpers ---------------- */
 
   async function api(path, opts) {
     const res = await fetch(API + path, {
-      headers: { "content-type": "application/json" },
       ...opts,
+      headers: { "content-type": "application/json", ...opts?.headers },
     });
     const text = await res.text();
     let data = null;
@@ -34,7 +41,12 @@
     } catch {
       data = { error: text };
     }
-    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    if (!res.ok) {
+      const err = new Error(data?.error || `HTTP ${res.status}`);
+      err.status = res.status;
+      err.body = data;
+      throw err;
+    }
     return data;
   }
 
@@ -127,12 +139,35 @@
     } else {
       fallback.value = src;
     }
-    state.saved = src;
-    setDirty(false);
+  }
+
+  /** Copies the editor text into the buffer of the file that is shown. */
+  function stash() {
+    if (state.slug) state.buffers[state.file] = getSource();
+  }
+
+  /** Switches the editor between handler.ts and handler.test.ts.
+   *  `keep` is false when the buffers were just filled from the server: the
+   *  editor still holds the previous function, so stashing would clobber them. */
+  function showFile(file, keep = true) {
+    if (keep) stash();
+    state.file = file;
+    for (const b of $("fileTabs").querySelectorAll("button")) {
+      b.classList.toggle("active", b.dataset.file === file);
+    }
+    setSource(state.buffers[file]);
+    setDirty(isDirty());
+  }
+
+  function isDirty() {
+    if (!state.slug) return false;
+    const now = { ...state.buffers, [state.file]: getSource() };
+    return now.handler !== state.savedBuffers.handler ||
+      now.tests !== state.savedBuffers.tests;
   }
 
   function markDirty() {
-    if (state.slug && getSource() !== state.saved) setDirty(true);
+    if (state.slug) setDirty(isDirty());
   }
 
   function setDirty(v) {
@@ -173,12 +208,34 @@
     $("curSlug").textContent = f ? f.slug : "—";
     $("btnRename").disabled = !f;
     $("btnDelete").disabled = !f;
+    $("btnPublish").disabled = !f;
     $("chkEnabled").disabled = !f;
     $("chkEnabled").checked = f ? f.enabled : false;
     const badge = $("probBadge");
     const has = !!(f && (f.error || state.problems));
     badge.hidden = !has;
     badge.textContent = "!";
+    renderVersionPill(f);
+  }
+
+  /** Says what answers a request right now, and whether the draft is ahead of it. */
+  function renderVersionPill(f) {
+    const pill = $("verPill");
+    pill.hidden = !f;
+    if (!f) return;
+    if (!f.live) {
+      pill.className = "ver none";
+      pill.textContent = "no version";
+      pill.title = "A save is a draft. Publish to answer requests.";
+    } else if (f.draftAhead) {
+      pill.className = "ver ahead";
+      pill.textContent = `live v${f.liveVersion} · draft ahead`;
+      pill.title = "The draft differs from the version that is live.";
+    } else {
+      pill.className = "ver";
+      pill.textContent = `live v${f.liveVersion}`;
+      pill.title = "The draft equals the version that is live.";
+    }
   }
 
   function renderPanel() {
@@ -228,12 +285,77 @@
             esc(l.text)
           }</span></div>`
         ).join("")
-        : '<div class="empty">No log output yet. Send a request from the Test tab.</div>';
+        : '<div class="empty">No log output yet. Send a request from the Try tab.</div>';
       body.scrollTop = body.scrollHeight;
       return;
     }
 
-    if (state.tab === "test") {
+    if (state.tab === "tests") {
+      const r = state.testRun;
+      // The editor may hold newer text than the buffer of the file it shows.
+      const testsText = state.file === "tests" ? getSource() : state.buffers.tests;
+      const head = `<div class="row">
+        <button id="tRun" class="primary">Run tests</button>
+        <span class="hint">${
+        testsText.trim()
+          ? "handler.test.ts runs against the saved draft."
+          : "This function has no tests. Write them in handler.test.ts."
+      }</span>
+      </div>`;
+      let out = '<div class="empty">Not run yet.</div>';
+      if (r?.running) out = '<div class="empty">Running…</div>';
+      else if (r?.skipped) out = `<div class="empty">Skipped: ${esc(r.skipped)}</div>`;
+      else if (r) {
+        out = `<div class="test-verdict ${r.ok ? "ok" : "err"}">${
+          r.ok ? `passed (${r.passed})` : `failed (${r.failed})`
+        }</div><pre class="out">${esc(r.output || "no output")}</pre>`;
+      }
+      body.innerHTML = head + out;
+      $("tRun").onclick = runTests;
+      return;
+    }
+
+    if (state.tab === "versions") {
+      const v = state.versions;
+      if (!v) {
+        body.innerHTML = '<div class="empty">Loading…</div>';
+        loadVersions();
+        return;
+      }
+      const rows = [...v.versions].reverse();
+      body.innerHTML = `<div class="row">
+        <button id="vPublish" class="primary">Publish the draft</button>
+        <span class="hint">${
+        v.draftAhead
+          ? "The draft differs from the live version."
+          : "The draft equals the live version."
+      }</span>
+      </div>` + (rows.length
+        ? `<div class="versions">${
+          rows.map((r) => {
+            const live = r.version === v.liveVersion;
+            return `<div class="vrow${live ? " live" : ""}">
+              <span class="vnum">v${r.version}</span>
+              <span class="vtime">${esc(r.createdAt.slice(0, 19).replace("T", " "))}</span>
+              <span class="vgate">check:${esc(r.check)} tests:${esc(r.tests)}</span>
+              <span class="vnote">${esc(r.note || "")}</span>
+              ${
+              live
+                ? '<span class="vlive">live</span>'
+                : `<button data-v="${r.version}" class="vmake">Make live</button>`
+            }
+            </div>`;
+          }).join("")
+        }</div>`
+        : '<div class="empty">No version yet. Publish the draft to answer requests.</div>');
+      $("vPublish").onclick = publish;
+      for (const b of body.querySelectorAll(".vmake")) {
+        b.onclick = () => makeLive(Number(b.dataset.v));
+      }
+      return;
+    }
+
+    if (state.tab === "try") {
       const t = state.test[f.slug] ||= {
         method: f.routes[0]?.method === "*" ? "GET" : (f.routes[0]?.method || "GET"),
         path: f.routes[0]?.url || `/${f.slug}`,
@@ -380,9 +502,17 @@
     const data = await api("/functions/" + encodeURIComponent(slug));
     state.slug = slug;
     state.problems = "";
+    state.testRun = null;
+    state.versions = {
+      liveVersion: data.liveVersion,
+      draftAhead: data.draftAhead,
+      versions: data.versionList ?? [],
+    };
     const i = state.functions.findIndex((f) => f.slug === slug);
     if (i >= 0) state.functions[i] = { ...state.functions[i], ...data };
-    setSource(data.source);
+    state.buffers = { handler: data.source, tests: data.tests ?? "" };
+    state.savedBuffers = { ...state.buffers };
+    showFile("handler", false);
     $("status").textContent = "";
     $("status").className = "status";
     renderSidebar();
@@ -396,11 +526,16 @@
     st.textContent = "saving…";
     st.className = "status";
     try {
+      stash();
       const data = await api("/functions/" + encodeURIComponent(state.slug), {
         method: "PUT",
-        body: JSON.stringify({ source: getSource() }),
+        body: JSON.stringify({
+          source: state.buffers.handler,
+          tests: state.buffers.tests.trim() ? state.buffers.tests : null,
+        }),
       });
-      state.saved = getSource();
+      state.savedBuffers = { ...state.buffers };
+      state.testRun = null;
       setDirty(false);
       state.problems = data.check?.ok === false ? data.check.output : "";
       const i = state.functions.findIndex((f) => f.slug === state.slug);
@@ -414,7 +549,8 @@
         st.className = "status err";
         state.tab = "problems";
       } else {
-        st.textContent = data.check?.skipped ? "saved (check skipped)" : "saved";
+        const note = data.check?.skipped ? " (check skipped)" : "";
+        st.textContent = data.live ? `draft saved${note}` : `draft saved${note}, nothing live`;
         st.className = "status ok";
       }
       renderSidebar();
@@ -425,6 +561,115 @@
       st.className = "status err";
       toast(e.message, true);
     }
+  }
+
+  /** Creates a version from the saved draft. The server gates it first. */
+  async function publish() {
+    if (!state.slug) return;
+    if (state.dirty) {
+      const go = await dialog({
+        title: "Unsaved changes",
+        body: '<p class="hint">Publish uses the saved draft. Save first.</p>',
+        actions: [
+          { label: "Save and publish", value: true, kind: "primary" },
+          { label: "Cancel", value: false },
+        ],
+      });
+      if (!go) return;
+      await save();
+    }
+    const note = await dialog({
+      title: `Publish ${state.slug}`,
+      body:
+        `<p class="hint">The type check and the tests run first. The new version answers requests at once.</p>
+         <div class="field"><label>Note (optional)</label>
+         <input id="pNote" placeholder="what changed" spellcheck="false"></div>`,
+      actions: [
+        { label: "Publish", value: () => $("pNote").value, kind: "primary" },
+        { label: "Cancel", value: null },
+      ],
+    });
+    if (note === null) return;
+
+    const st = $("status");
+    st.textContent = "publishing…";
+    st.className = "status";
+    try {
+      const res = await api(`/functions/${encodeURIComponent(state.slug)}/versions`, {
+        method: "POST",
+        body: JSON.stringify({ note }),
+      });
+      state.testRun = res.tests;
+      st.textContent = `live on v${res.version.version}`;
+      st.className = "status ok";
+      toast(`${state.slug} is live on v${res.version.version}`);
+      state.tab = "versions";
+      await refresh();
+      await loadVersions();
+    } catch (e) {
+      st.textContent = "not published";
+      st.className = "status err";
+      if (e.status === 422) {
+        // The gate refused it. Show what failed instead of a bare message.
+        state.testRun = e.body.tests;
+        state.problems = e.body.check?.ok === false ? e.body.check.output : "";
+        state.tab = e.body.error === "check_failed" ? "problems" : "tests";
+        renderPanel();
+        const force = await dialog({
+          title: "The gate failed",
+          body: `<p class="hint">${
+            esc(e.body.error === "check_failed" ? "The type check failed." : "The tests failed.")
+          } Publish anyway?</p>`,
+          actions: [
+            { label: "Publish anyway", value: true, kind: "danger" },
+            { label: "Cancel", value: false, kind: "primary" },
+          ],
+        });
+        if (!force) return;
+        const res = await api(`/functions/${encodeURIComponent(state.slug)}/versions`, {
+          method: "POST",
+          body: JSON.stringify({ note, force: true }),
+        });
+        toast(`${state.slug} is live on v${res.version.version}`);
+        await refresh();
+        await loadVersions();
+      } else {
+        toast(e.message, true);
+      }
+    }
+  }
+
+  /** Runs `deno test` against the saved draft. */
+  async function runTests() {
+    if (!state.slug) return;
+    state.tab = "tests";
+    state.testRun = { running: true };
+    renderPanel();
+    try {
+      state.testRun = await api(`/functions/${encodeURIComponent(state.slug)}/test`, {
+        method: "POST",
+        headers: { "x-lambdock-target": "draft" },
+      });
+    } catch (e) {
+      state.testRun = { ok: false, output: e.message, passed: 0, failed: 0 };
+    }
+    renderPanel();
+  }
+
+  async function loadVersions() {
+    if (!state.slug) return;
+    state.versions = await api(`/functions/${encodeURIComponent(state.slug)}/versions`);
+    renderPanel();
+  }
+
+  async function makeLive(version) {
+    await api(`/functions/${encodeURIComponent(state.slug)}/live`, {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    });
+    toast(`${state.slug} is live on v${version}`);
+    await refresh();
+    await loadVersions();
   }
 
   async function createFn() {
@@ -624,7 +869,11 @@ export default async function handler(req: Request, ctx: Ctx) {
   bindEnvDialog();
 
   $("btnSave").onclick = save;
+  $("btnPublish").onclick = publish;
   $("btnNew").onclick = createFn;
+  for (const b of $("fileTabs").querySelectorAll("button")) {
+    b.onclick = () => showFile(b.dataset.file);
+  }
   $("btnRename").onclick = renameFn;
   $("btnDelete").onclick = deleteFn;
   $("btnEnv").onclick = editEnv;
@@ -651,9 +900,14 @@ export default async function handler(req: Request, ctx: Ctx) {
   }
 
   globalThis.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === "s") {
       e.preventDefault();
       save();
+    } else if (key === "enter") {
+      e.preventDefault();
+      publish();
     }
   });
 

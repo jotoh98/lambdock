@@ -11,6 +11,60 @@ export default () => "hello";
 
 Save it as `ping`, and `GET /ping` gives `hello`.
 
+## A save is a draft
+
+Saving writes `handler.ts`. The live route keeps serving the version it had. Create a version to
+change what a request gets:
+
+```bash
+lambdock push hello        # save the draft
+lambdock test hello        # run handler.test.ts against the draft
+lambdock publish hello     # deno check + tests, then live
+```
+
+In the editor: `Cmd`/`Ctrl` + `S` saves, the **Publish** button creates a version, and the
+**Versions** tab makes an older one live again.
+
+The first version of a new function goes live at once, because there is nothing to break yet.
+
+## Tests
+
+Put them in `handler.test.ts`, next to the handler:
+
+```ts
+import { assertEquals } from "jsr:@std/assert@^1.0.10";
+import { callFn, memoryKv } from "../../lambdock.ts";
+import handler from "./handler.ts";
+
+Deno.test("the root answers", async () => {
+  const res = await callFn(handler, "/");
+  assertEquals(res.status, 200);
+});
+
+Deno.test("a parameter is used", async () => {
+  const res = await callFn(handler, "/42", { params: { id: "42" } });
+  assertEquals((await res.json()).id, "42");
+});
+
+Deno.test("two calls share one store", async () => {
+  const kv = memoryKv();
+  await callFn(handler, new Request("http://x/", { method: "POST", body: "{}" }), { kv });
+  const res = await callFn(handler, "/");
+  assertEquals(res.status, 200);
+});
+```
+
+| Helper                       | What it gives you                                        |
+| ---------------------------- | -------------------------------------------------------- |
+| `callFn(handler, req, ctx?)` | Calls the handler as the server does, returns a Response |
+| `testCtx(partial?)`          | A `Ctx` with usable defaults                             |
+| `memoryKv()`                 | A `FnKv` in memory, so tests never touch stored data     |
+
+`req` is a `Request` or a path string. `ctx` sets `params`, `env`, `kv`, `path` and the rest.
+
+The tests run against the draft on disk, in a `deno test` subprocess with full permissions. They
+must pass before a version can be created. Publish with `force` to go ahead anyway.
+
 ## The module contract
 
 ```ts

@@ -34,14 +34,21 @@
         <section class="pane" id="pane">
           <div class="toolbar">
             <span class="slug" id="curSlug">—</span>
+            <span class="ver" id="verPill" hidden></span>
             <span class="status" id="status"></span>
             <div class="spacer"></div>
+            <div class="files" id="fileTabs">
+              <button data-file="handler" class="active">handler.ts</button>
+              <button data-file="tests">handler.test.ts</button>
+            </div>
             <label
               style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--fg-dim)">
           <input type="checkbox" id="chkEnabled" style="width:14px;height:14px"> enabled
         </label>
             <button id="btnSave" class="primary"
               disabled>Save <span style="opacity:.65">&#8984;S</span></button>
+            <button id="btnPublish" disabled
+              title="Create a version from the draft and make it live">Publish</button>
           </div>
 
           <div class="editor-wrap" id="editorWrap">
@@ -53,7 +60,9 @@
           <div class="panel">
             <div class="tabs">
               <div class="tab active" data-tab="routes">Routes</div>
-              <div class="tab" data-tab="test">Test</div>
+              <div class="tab" data-tab="try">Try</div>
+              <div class="tab" data-tab="tests">Tests</div>
+              <div class="tab" data-tab="versions">Versions</div>
               <div class="tab" data-tab="logs">Logs</div>
               <div class="tab"
                 data-tab="problems">Problems<span class="badge" id="probBadge" hidden>0</span></div>

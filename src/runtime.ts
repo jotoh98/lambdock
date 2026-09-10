@@ -3,20 +3,7 @@ import { kvFor } from "./kv.ts";
 import * as logs from "./logs.ts";
 import * as store from "./store.ts";
 import type { Match } from "./registry.ts";
-import type { Ctx } from "../templates/lambdock.ts";
-
-/** Turns a plain return value into a Response. */
-function toResponse(value: unknown): Response {
-  if (value instanceof Response) return value;
-  if (value === undefined || value === null) return new Response(null, { status: 204 });
-  if (typeof value === "string") {
-    return new Response(value, { headers: { "content-type": "text/plain; charset=utf-8" } });
-  }
-  if (value instanceof ReadableStream || value instanceof Uint8Array || value instanceof Blob) {
-    return new Response(value as BodyInit);
-  }
-  return Response.json(value);
-}
+import { type Ctx, toResponse } from "../templates/lambdock.ts";
 
 function errorResponse(slug: string, requestId: string, e: unknown): Response {
   const err = e instanceof Error ? e : new Error(String(e));
@@ -37,7 +24,12 @@ function errorResponse(slug: string, requestId: string, e: unknown): Response {
   }, { status: 500 });
 }
 
-export async function invoke(match: Match, req: Request, path: string): Promise<Response> {
+export async function invoke(
+  match: Match,
+  req: Request,
+  path: string,
+  label = "",
+): Promise<Response> {
   const { entry, params } = match;
   const requestId = crypto.randomUUID().slice(0, 8);
   const started = performance.now();
@@ -82,6 +74,10 @@ export async function invoke(match: Match, req: Request, path: string): Promise<
     const ms = Math.round(performance.now() - started);
     const headers = new Headers(res.headers);
     headers.set("x-lambdock-function", entry.slug);
+    headers.set(
+      "x-lambdock-version",
+      label || (entry.liveVersion === null ? "draft" : `v${entry.liveVersion}`),
+    );
     headers.set("x-lambdock-request-id", requestId);
     headers.set("x-lambdock-duration-ms", String(ms));
     logs.push({
@@ -89,7 +85,7 @@ export async function invoke(match: Match, req: Request, path: string): Promise<
       slug: entry.slug,
       requestId,
       level: "system",
-      text: `${req.method} ${path} -> ${res.status} in ${ms} ms`,
+      text: `${label ? label + " " : ""}${req.method} ${path} -> ${res.status} in ${ms} ms`,
     });
     return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
   } catch (e) {

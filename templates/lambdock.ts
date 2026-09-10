@@ -65,3 +65,85 @@ export type Handler = (
   req: Request,
   ctx: Ctx,
 ) => Response | Promise<Response> | unknown;
+
+/** Turns the return value of a handler into a Response. The server uses this too. */
+export function toResponse(value: unknown): Response {
+  if (value instanceof Response) return value;
+  if (value === undefined || value === null) return new Response(null, { status: 204 });
+  if (typeof value === "string") {
+    return new Response(value, { headers: { "content-type": "text/plain; charset=utf-8" } });
+  }
+  if (value instanceof ReadableStream || value instanceof Uint8Array || value instanceof Blob) {
+    return new Response(value as BodyInit);
+  }
+  return Response.json(value);
+}
+
+/* ------------------------------------------------------------------ tests ---- */
+
+/** A `FnKv` that lives in memory. Tests get one, so they never touch stored data. */
+export function memoryKv(): FnKv {
+  const map = new Map<string, unknown>();
+  return {
+    get<T>(key: string) {
+      return Promise.resolve(map.has(key) ? map.get(key) as T : null);
+    },
+    set(key, value) {
+      map.set(key, value);
+      return Promise.resolve();
+    },
+    delete(key) {
+      map.delete(key);
+      return Promise.resolve();
+    },
+    list<T>(prefix = "") {
+      const out: Array<{ key: string; value: T }> = [];
+      for (const [key, value] of map) {
+        if (key.startsWith(prefix)) out.push({ key, value: value as T });
+      }
+      return Promise.resolve(out);
+    },
+  };
+}
+
+/** Builds a context for a test. Every field has a usable default. */
+export function testCtx(init: Partial<Ctx> = {}): Ctx {
+  const url = init.url ?? new URL("http://localhost/");
+  return {
+    params: {},
+    url,
+    path: url.pathname,
+    slug: "test",
+    requestId: "test",
+    env: {},
+    kv: memoryKv(),
+    log: () => {},
+    signal: new AbortController().signal,
+    ...init,
+  };
+}
+
+/**
+ * Calls a handler the way the server does and always gives a Response.
+ *
+ * ```ts
+ * import { callFn } from "../../lambdock.ts";
+ * import handler from "./handler.ts";
+ *
+ * Deno.test("the root answers", async () => {
+ *   const res = await callFn(handler, "/");
+ *   assertEquals(res.status, 200);
+ * });
+ * ```
+ */
+export async function callFn(
+  handler: Handler,
+  request: Request | string,
+  ctx: Partial<Ctx> = {},
+): Promise<Response> {
+  const req = typeof request === "string"
+    ? new Request(new URL(request, "http://localhost"))
+    : request;
+  const url = new URL(req.url);
+  return toResponse(await handler(req, testCtx({ ...ctx, url, path: ctx.path ?? url.pathname })));
+}

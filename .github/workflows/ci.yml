@@ -8,6 +8,7 @@ on:
 
 jobs:
   check:
+    name: unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,37 +22,70 @@ jobs:
       - name: Lint
         run: deno lint
 
-      - name: Type check
-        run: deno check src/main.ts
+      - name: Type check the server
+        run: deno task check
 
-      - name: Test
+      - name: Type check the client
+        run: cd client && deno task check
+
+      - name: Server tests
         run: deno task test
+
+      - name: Client tests
+        run: deno task test:client
 
       - name: Editor bundle builds
         run: deno task build:editor
 
-  image:
-    name: image builds
+  cli:
+    name: cli compiles
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # The client must stay free of runtime dependencies, so that one binary
+      # runs on a machine with no Deno and no package manager.
+      - name: Compile
+        run: cd client && deno task compile
+
+      - name: The binary runs on its own
+        run: env -i HOME=/tmp DENO_DIR=/nonexistent client/dist/lambdock --help
+
+  e2e:
+    name: end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - name: Build the image
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: false
           load: true
-          tags: lambdock:ci
+          tags: lambdock:e2e
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke test the image
-        run: |
-          docker run -d --name lambdock -p 8000:8000 lambdock:ci
-          for i in $(seq 1 30); do
-            curl -fsS http://localhost:8000/__/api/health && break
-            sleep 1
-          done
-          curl -fsS http://localhost:8000/hello/ci | grep ci
-          curl -fsS -o /dev/null http://localhost:8000/__/
-          docker rm -f lambdock
+      # Starts the image, drives it with the client over HTTP, and checks the
+      # version files inside the container.
+      - name: End to end tests
+        run: deno task test:e2e
+        env:
+          LAMBDOCK_E2E_RUNTIME: docker
+          LAMBDOCK_E2E_IMAGE: lambdock:e2e
+
+      - name: Container log on failure
+        if: failure()
+        run: docker logs lambdock-e2e || true
+
+      - name: Remove the container
+        if: always()
+        run: docker rm -f lambdock-e2e || true
