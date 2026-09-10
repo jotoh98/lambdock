@@ -39,7 +39,7 @@ Deno.test("the container serves the editor and the admin API", async () => {
 
 Deno.test("the seeded examples are live on version 1", async () => {
   const fns = await lam.list();
-  assertEquals(fns.map((f) => f.slug).sort(), ["echo", "hello", "todos"]);
+  assertEquals(fns.map((f) => f.slug).sort(), ["echo", "hello", "page", "todos"]);
   for (const f of fns) {
     assertEquals(f.live, true, `${f.slug} should be live`);
     assertEquals(f.liveVersion, 1);

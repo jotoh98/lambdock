@@ -39,10 +39,16 @@ function dto(entry: registry.FnEntry) {
   };
 }
 
-/** The same fields plus one filesystem read: does the draft differ from the live version? */
+/** The same fields plus filesystem reads: the draft language, and whether it differs from live. */
 async function fullDto(entry: registry.FnEntry) {
-  return { ...dto(entry), draftAhead: await store.draftIsAhead(entry.slug) };
+  return {
+    ...dto(entry),
+    lang: (await store.filesOf(entry.slug)).lang,
+    draftAhead: await store.draftIsAhead(entry.slug),
+  };
 }
+
+const LANG_ERROR = `lang must be "ts" or "tsx"`;
 
 async function reloadAndDescribe(slug: string) {
   const entry = await registry.load(slug);
@@ -159,14 +165,18 @@ route("POST", "/functions", async (_m, req) => {
     source?: string;
     tests?: string;
     publish?: boolean;
+    lang?: string;
   };
   if (!body.slug) return fail("slug is required");
   const invalid = store.validateSlug(body.slug);
   if (invalid) return fail(invalid);
+  const lang = body.lang ?? "ts";
+  if (!store.isLang(lang)) return fail(LANG_ERROR);
   if (await store.hasFn(body.slug)) return fail(`Function "${body.slug}" already exists.`, 409);
-  await store.createFn(body.slug, body.source ?? await store.newFunctionTemplate(), {
-    tests: body.tests ?? (body.source ? undefined : await store.newTestTemplate()),
+  await store.createFn(body.slug, body.source ?? await store.newFunctionTemplate(lang), {
+    tests: body.tests ?? (body.source ? undefined : await store.newTestTemplate(lang)),
     publish: body.publish,
+    lang,
   });
   return json(await reloadAndDescribe(body.slug), 201);
 });
@@ -190,9 +200,14 @@ route("PUT", "/functions/:slug", async (m, req) => {
   const slug = slugOf(m);
   const missing = await need(slug);
   if (missing) return missing;
-  const body = await req.json() as { source?: string; tests?: string | null };
-  if (typeof body.source !== "string" && body.tests === undefined) {
-    return fail("source or tests is required");
+  const body = await req.json() as { source?: string; tests?: string | null; lang?: string };
+  if (typeof body.source !== "string" && body.tests === undefined && body.lang === undefined) {
+    return fail("source, tests or lang is required");
+  }
+  // The language goes first, so the source and the tests land in the renamed files.
+  if (body.lang !== undefined) {
+    if (!store.isLang(body.lang)) return fail(LANG_ERROR);
+    await store.setLang(slug, body.lang);
   }
   if (typeof body.source === "string") await store.writeSource(slug, body.source);
   if (body.tests !== undefined) await store.writeTests(slug, body.tests);
@@ -314,6 +329,7 @@ route("GET", "/functions/:slug/versions/:version", async (m) => {
   return json({
     version: found,
     live: meta.liveVersion === n,
+    lang: (await store.filesOf(slug, n)).lang,
     source: await store.readVersionSource(slug, n),
     tests: await store.readVersionTests(slug, n),
   });

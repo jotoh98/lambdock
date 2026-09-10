@@ -1,4 +1,5 @@
-import { config, paths } from "./config.ts";
+import { config } from "./config.ts";
+import { filesOf } from "./store.ts";
 
 export interface TestResult {
   ok: boolean;
@@ -84,11 +85,11 @@ export async function runTestFile(file: string): Promise<TestResult> {
 }
 
 /** Runs the tests that sit next to the draft. */
-export function runTests(slug: string): Promise<TestResult> {
-  return runTestFile(paths.tests(slug));
+export async function runTests(slug: string): Promise<TestResult> {
+  return await runTestFile((await filesOf(slug)).tests);
 }
 
 /** Runs the tests captured in one published version. */
-export function runVersionTests(slug: string, version: number): Promise<TestResult> {
-  return runTestFile(paths.versionTests(slug, version));
+export async function runVersionTests(slug: string, version: number): Promise<TestResult> {
+  return await runTestFile((await filesOf(slug, version)).tests);
 }

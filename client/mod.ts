@@ -12,6 +12,9 @@
 /** What a call may run: the draft, the live version, or one version number. */
 export type Target = "draft" | "live" | number;
 
+/** The language of a function: `handler.ts` or `handler.tsx`. */
+export type Lang = "ts" | "tsx";
+
 export interface RouteInfo {
   method: string;
   path: string;
@@ -31,6 +34,8 @@ export interface FnSummary {
   versions: number;
   /** True when the draft differs from the live version. */
   draftAhead: boolean;
+  /** The language of the draft. */
+  lang: Lang;
   routes: RouteInfo[];
 }
 
@@ -83,6 +88,7 @@ export interface VersionList {
 export interface VersionDetail {
   version: VersionMeta;
   live: boolean;
+  lang: Lang;
   /** The handler source of that version. */
   source: string;
   /** The test source of that version, or null. */
@@ -220,15 +226,15 @@ export class Lambdock {
   /** Creates a function. Version 1 goes live at once. */
   create(
     slug: string,
-    opts: { source?: string; tests?: string; publish?: boolean } = {},
+    opts: { source?: string; tests?: string; publish?: boolean; lang?: Lang } = {},
   ): Promise<FnSummary & { check: CheckResult }> {
     return this.#post("/functions", { slug, ...opts });
   }
 
-  /** Saves the draft. The live route does not change. */
+  /** Saves the draft. The live route does not change. A new `lang` renames the draft files. */
   save(
     slug: string,
-    body: { source?: string; tests?: string | null },
+    body: { source?: string; tests?: string | null; lang?: Lang },
   ): Promise<FnSummary & { check: CheckResult }> {
     return this.#json(`/functions/${encodeURIComponent(slug)}`, {
       method: "PUT",
@@ -314,6 +320,7 @@ export class Lambdock {
   async deploy(slug: string, body: {
     source: string;
     tests?: string | null;
+    lang?: Lang;
     note?: string;
     force?: boolean;
   }): Promise<PublishResult> {
@@ -327,9 +334,10 @@ export class Lambdock {
         source: body.source,
         tests: body.tests ?? undefined,
         publish: false,
+        lang: body.lang,
       });
     } else {
-      await this.save(slug, { source: body.source, tests: body.tests });
+      await this.save(slug, { source: body.source, tests: body.tests, lang: body.lang });
     }
     return await this.publish(slug, { note: body.note, force: body.force });
   }

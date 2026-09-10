@@ -58,6 +58,7 @@ export interface Ctx {
 /**
  * A handler. Return a `Response`, or a plain value:
  *   - `string`            -> text/plain
+ *   - JSX or `raw()`      -> text/html
  *   - `undefined`/`null`  -> 204 No Content
  *   - anything else       -> application/json
  */
@@ -66,12 +67,38 @@ export type Handler = (
   ctx: Ctx,
 ) => Response | Promise<Response> | unknown;
 
+/* ------------------------------------------------------------------- html ---- */
+
+/** A registered symbol, so each copy of this file knows the same brand. */
+const HTML = Symbol.for("lambdock.html");
+
+/** Rendered HTML. A JSX element in a `handler.tsx` is one. */
+export interface Html {
+  readonly [HTML]: string;
+  toString(): string;
+}
+
+/** Marks a string as HTML that is safe. JSX does not escape it. */
+export function raw(html: string): Html {
+  return { [HTML]: html, toString: () => html };
+}
+
+export function isHtml(value: unknown): value is Html {
+  return typeof value === "object" && value !== null &&
+    typeof (value as Record<symbol, unknown>)[HTML] === "string";
+}
+
 /** Turns the return value of a handler into a Response. The server uses this too. */
 export function toResponse(value: unknown): Response {
   if (value instanceof Response) return value;
   if (value === undefined || value === null) return new Response(null, { status: 204 });
   if (typeof value === "string") {
     return new Response(value, { headers: { "content-type": "text/plain; charset=utf-8" } });
+  }
+  if (isHtml(value)) {
+    const html = value[HTML];
+    const page = /^<html[\s>]/i.test(html) ? `<!doctype html>${html}` : html;
+    return new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
   }
   if (value instanceof ReadableStream || value instanceof Uint8Array || value instanceof Blob) {
     return new Response(value as BodyInit);

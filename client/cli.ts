@@ -8,6 +8,7 @@ import {
   type FnSummary,
   Lambdock,
   LambdockError,
+  type Lang,
   type Target,
   type TestResult,
   type VersionMeta,
@@ -21,7 +22,7 @@ Reading
   ls                          List functions, with the live version of each
   show <slug>                 Routes, versions and the state of the draft
   versions <slug>             Version history
-  pull <slug>                 Write the draft to <slug>/handler.ts
+  pull <slug>                 Write the draft to <slug>/handler.ts or handler.tsx
   logs <slug> [--follow]      Recent log lines
   env                         Show the shared environment
 
@@ -45,6 +46,7 @@ Flags
   --url <url>       Server. Default: $LAMBDOCK_URL or http://localhost:8000
   --file <path>     Source for new, push and deploy
   --tests <path>    Test file for new, push and deploy
+  --lang <ts|tsx>   Language for new, push and deploy. Default: the file extension
   --dir <path>      Target directory for pull. Default: <slug>
   --target <t>      draft (default), live, or a version number
   --version <n>     Version for pull and check and test
@@ -63,7 +65,7 @@ A save is a draft. Only "publish" changes what the server answers with.`;
 let flags: ReturnType<typeof parseFlags>;
 try {
   flags = parseFlags(Deno.args, {
-    string: ["url", "file", "tests", "dir", "target", "version", "note", "method", "data"],
+    string: ["url", "file", "tests", "lang", "dir", "target", "version", "note", "method", "data"],
     boolean: ["json", "force", "follow", "help", "yes"],
     collect: ["header"],
     alias: { h: "help", X: "method", d: "data", H: "header", v: "version" },
@@ -113,19 +115,32 @@ function target(): Target {
 async function sourceFile(slug: string): Promise<string> {
   const given = str("file");
   if (given) return given;
-  for (const p of [`${slug}/handler.ts`, `${slug}.ts`, "handler.ts"]) {
+  // .tsx first, the same order as the server.
+  const places = [`${slug}/handler`, slug, "handler"].flatMap((p) => [`${p}.tsx`, `${p}.ts`]);
+  for (const p of places) {
     try {
       await Deno.stat(p);
       return p;
     } catch { /* try the next one */ }
   }
-  die(`no source file found. Pass --file, or put it in ${slug}/handler.ts`);
+  die(`no source file found. Pass --file, or put it in ${slug}/handler.ts or handler.tsx`);
+}
+
+/** --lang, else the extension of the source file. */
+function langOf(file?: string): Lang | undefined {
+  const given = str("lang");
+  if (given !== undefined) {
+    if (given !== "ts" && given !== "tsx") die(`bad --lang: ${given}. Use ts or tsx`);
+    return given;
+  }
+  if (!file) return undefined;
+  return file.endsWith(".tsx") ? "tsx" : "ts";
 }
 
 /** The test file that belongs to a source file, when it exists. */
 async function testFile(source: string): Promise<string | undefined> {
   if (str("tests")) return str("tests");
-  const guess = source.replace(/\.ts$/, ".test.ts");
+  const guess = source.replace(/\.(tsx?)$/, ".test.$1");
   try {
     await Deno.stat(guess);
     return guess;
@@ -214,18 +229,26 @@ async function run(): Promise<number> {
       const slug = need(0, "slug");
       const dir = str("dir") ?? slug;
       const t = target();
-      const [source, tests] = t === "draft"
-        ? await lam.get(slug).then((f) => [f.source, f.tests] as const)
+      const [source, tests, lang] = t === "draft"
+        ? await lam.get(slug).then((f) => [f.source, f.tests, f.lang] as const)
         : await lam.versions(slug)
           .then((l) => (t === "live" ? l.liveVersion! : t))
           .then((n) => lam.version(slug, n))
-          .then((v) => [v.source, v.tests] as const);
+          .then((v) => [v.source, v.tests, v.lang] as const);
       await Deno.mkdir(dir, { recursive: true });
-      await Deno.writeTextFile(`${dir}/handler.ts`, source);
-      console.log(`${dir}/handler.ts`);
+      await Deno.writeTextFile(`${dir}/handler.${lang}`, source);
+      console.log(`${dir}/handler.${lang}`);
       if (tests) {
-        await Deno.writeTextFile(`${dir}/handler.test.ts`, tests);
-        console.log(`${dir}/handler.test.ts`);
+        await Deno.writeTextFile(`${dir}/handler.test.${lang}`, tests);
+        console.log(`${dir}/handler.test.${lang}`);
+      }
+      // A file of the other language would win the next push, or feed it old tests.
+      const other = lang === "tsx" ? "ts" : "tsx";
+      for (const stale of [`${dir}/handler.${other}`, `${dir}/handler.test.${other}`]) {
+        try {
+          await Deno.remove(stale);
+          console.log(dim(`removed ${stale}`));
+        } catch { /* not there */ }
       }
       return 0;
     }
@@ -238,6 +261,7 @@ async function run(): Promise<number> {
       const created = await lam.create(slug, {
         source,
         tests: testsPath ? await Deno.readTextFile(testsPath) : undefined,
+        lang: langOf(file),
       });
       if (flags.json) return out(created), 0;
       printFn(created);
@@ -251,6 +275,7 @@ async function run(): Promise<number> {
       const saved = await lam.save(slug, {
         source: await Deno.readTextFile(file),
         tests: testsPath ? await Deno.readTextFile(testsPath) : undefined,
+        lang: langOf(file),
       });
       if (flags.json) return out(saved), 0;
       console.log(`saved draft of ${bold(slug)} from ${file}`);
@@ -291,6 +316,7 @@ async function run(): Promise<number> {
         const res = await lam.deploy(slug, {
           source: await Deno.readTextFile(file),
           tests: testsPath ? await Deno.readTextFile(testsPath) : undefined,
+          lang: langOf(file),
           note: str("note"),
           force: bool("force"),
         });

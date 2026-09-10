@@ -201,6 +201,28 @@ Deno.test("logs are readable", async () => {
   assert(lines.some((l) => l.text.includes("greeting ada")));
 });
 
+Deno.test("the tsx example answers with HTML and passes its gate", async () => {
+  const page = await lam.get("page");
+  assertEquals(page.lang, "tsx");
+  const res = await fetch(`http://localhost:${port}/page`);
+  assertEquals(res.headers.get("content-type"), "text/html; charset=utf-8");
+  assert((await res.text()).startsWith("<!doctype html><html"));
+  const check = await lam.check("page");
+  assertEquals(check.ok, true, check.output);
+  const run = await lam.test("page");
+  assertEquals(run.ok, true, run.output);
+});
+
+Deno.test("a new tsx function starts from a template that passes its gate", async () => {
+  const created = await lam.create("fresh-page", { lang: "tsx" });
+  assertEquals(created.lang, "tsx");
+  assertEquals(created.check.ok, true, created.check.output);
+  const run = await lam.test("fresh-page");
+  assertEquals(run.ok, true, run.output);
+  const html = await (await fetch(`http://localhost:${port}/fresh-page/ada`)).text();
+  assert(html.includes("<h1>Hello ada</h1>"), html);
+});
+
 Deno.test("remove deletes the function and its versions", async () => {
   await lam.remove("deployed");
   await assertRejects(() => lam.get("deployed"), LambdockError);

@@ -62,6 +62,24 @@ data/functions/hello@1/     version 1: handler.ts, handler.test.ts
 data/functions/hello@2/     version 2: handler.ts
 ```
 
+### The language is the file extension
+
+A function is `handler.ts` or `handler.tsx`, and its tests follow the same extension. No field in
+`meta.json` records the language. `store.filesOf(slug, version?)` looks at the directory, and a
+`handler.tsx` wins over a `handler.ts`. Therefore a version keeps its own language, and a file that
+you rename with your own editor takes effect.
+
+A save with a new `lang` renames the draft files with `Deno.rename`. The source does not change. A
+language change makes the draft ahead of the live version, also when the text is the same.
+
+The JSX runtime is `templates/jsx/jsx-runtime.ts`. `store.init()` copies it to
+`data/jsx/jsx-runtime`, with no extension. `/** @jsxImportSource ../../jsx */` makes Deno import
+exactly `../../jsx/jsx-runtime`, and the import resolves under `--no-config` too. From there
+`../lambdock.ts` is the contract, the same as from `templates/jsx/`.
+
+`toResponse()` knows rendered HTML by a registered symbol, `Symbol.for("lambdock.html")`. The server
+and the handlers load two different copies of `lambdock.ts`, so `instanceof` would not work.
+
 `meta.json` holds `liveVersion` and the list of versions. `registry.load()` imports the file of
 `liveVersion`, never the draft, unless nothing is published at all.
 
