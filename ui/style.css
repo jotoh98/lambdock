@@ -523,3 +523,102 @@ dialog .foot {
   border-color: var(--red);
   color: #ffd7da;
 }
+
+/* ---- version state ---- */
+
+.ver {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.ver.ahead {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+.ver.none {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.files {
+  display: flex;
+  gap: 2px;
+  margin-right: 4px;
+}
+.files button {
+  font-size: 11px;
+  padding: 3px 8px;
+  color: var(--fg-dim);
+  background: transparent;
+}
+.files button.active {
+  color: var(--fg);
+  background: var(--bg-3);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.row .hint {
+  margin: 0;
+}
+
+.test-verdict {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.test-verdict.ok {
+  color: var(--green);
+}
+.test-verdict.err {
+  color: var(--red);
+}
+
+.versions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.vrow {
+  display: grid;
+  grid-template-columns: 44px 140px auto 1fr 88px;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+.vrow:nth-child(odd) {
+  background: var(--bg-2);
+}
+.vrow.live {
+  outline: 1px solid var(--green);
+}
+.vnum {
+  font-weight: 600;
+}
+.vtime,
+.vgate {
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+.vnote {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vlive {
+  color: var(--green);
+  text-align: center;
+}
+.vrow button {
+  font-size: 11px;
+  padding: 2px 7px;
+}

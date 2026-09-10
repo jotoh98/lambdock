@@ -1,4 +1,4 @@
-import { config, paths } from "./config.ts";
+import { config, isVersionDir, paths } from "./config.ts";
 import { installConsoleCapture } from "./console.ts";
 import { installCrashGuard } from "./guard.ts";
 import { handleAdmin } from "./admin.ts";
@@ -42,6 +42,15 @@ async function handle(req: Request): Promise<Response> {
   if (!entry.meta.enabled) {
     return Response.json({ error: "function_disabled", function: slug }, { status: 503 });
   }
+  if (!entry.live) {
+    // A save writes a draft. Only a published version answers a request.
+    return Response.json({
+      error: "no_live_version",
+      function: slug,
+      hint: `Publish a version: POST ${ADMIN}/api/functions/${slug}/versions`,
+      editor: `${ADMIN}/`,
+    }, { status: 409 });
+  }
   if (entry.error || !entry.handler) {
     return Response.json({
       error: "function_failed_to_load",
@@ -79,8 +88,10 @@ async function watchFunctions() {
     for await (const event of Deno.watchFs(paths.functions())) {
       for (const p of event.paths) {
         const rel = p.slice(paths.functions().length + 1);
-        const slug = rel.split("/")[0];
-        if (slug && !slug.endsWith(".tmp")) dirty.add(slug);
+        const dir = rel.split("/")[0];
+        // A version snapshot is immutable. Its own write never needs a reload,
+        // and the meta.json write of the same publish triggers one anyway.
+        if (dir && !dir.endsWith(".tmp") && !isVersionDir(dir)) dirty.add(dir);
       }
       clearTimeout(timer);
       timer = setTimeout(flush, 150);

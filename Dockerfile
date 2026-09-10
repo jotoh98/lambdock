@@ -12,6 +12,11 @@ COPY scripts ./scripts
 # Warms the module cache. The container then needs no network at start.
 RUN deno install --entrypoint src/main.ts && deno check src/main.ts
 
+# The test templates import this. `deno test` runs with --no-config inside
+# data/, so it resolves the full specifier and would otherwise download it at
+# the first publish. Cache it here, and an offline container can still gate.
+RUN deno cache "jsr:@std/assert@^1.0.10"
+
 ENV LAMBDOCK_DATA=/data \
     LAMBDOCK_HOST=0.0.0.0 \
     LAMBDOCK_PORT=8000

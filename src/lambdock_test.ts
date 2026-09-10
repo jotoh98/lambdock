@@ -43,6 +43,12 @@ await registry.loadAll();
 const req = (path: string, init?: RequestInit) =>
   handle(new Request("http://localhost" + path, init));
 
+const api = (path: string, init?: RequestInit) =>
+  req("/__/api" + path, {
+    ...init,
+    headers: { "content-type": "application/json", ...init?.headers },
+  });
+
 Deno.test("slug validation keeps the admin prefix free", () => {
   assertEquals(store.validateSlug("hello"), null);
   assertEquals(store.validateSlug("my-fn-2"), null);
@@ -101,15 +107,119 @@ Deno.test("a disabled function gives 503", async () => {
   assertEquals((await req("/catchall/x")).status, 200);
 });
 
-Deno.test("saving the source hot-reloads the function", async () => {
+Deno.test("a save writes a draft and leaves the live route alone", async () => {
   await store.writeSource("greet", src(`export default () => "v2";`));
-  assertEquals(await (await req("/greet/anything")).text(), "v2");
-  await store.writeSource(
-    "greet",
-    src(`export const config: FnConfig = { routes: [{ method: "GET", path: "/:name" }] };
-export default (_r: Request, c: Ctx) => ({ params: c.params, path: c.path });`),
-  );
+  await registry.load("greet");
   assertEquals((await (await req("/greet/ada")).json()).params.name, "ada");
+  assert(await store.draftIsAhead("greet"));
+});
+
+Deno.test("creating a version makes the draft live", async () => {
+  await api("/functions/greet/versions", { method: "POST", body: "{}" });
+  assertEquals(await (await req("/greet/anything")).text(), "v2");
+  assertEquals((await store.readMeta("greet")).liveVersion, 2);
+  assertEquals(await store.draftIsAhead("greet"), false);
+});
+
+Deno.test("an older version can be made live again", async () => {
+  await api("/functions/greet/live", { method: "POST", body: JSON.stringify({ version: 1 }) });
+  assertEquals((await (await req("/greet/ada")).json()).params.name, "ada");
+  assertEquals((await store.readMeta("greet")).liveVersion, 1);
+});
+
+Deno.test("a version keeps its own source when the draft moves on", async () => {
+  await store.writeSource("greet", src(`export default () => "v3-draft";`));
+  await registry.load("greet");
+  assertEquals(await store.readVersionSource("greet", 2), src(`export default () => "v2";`));
+  assertEquals((await (await req("/greet/ada")).json()).params.name, "ada");
+});
+
+Deno.test("a function with no version refuses requests and names the fix", async () => {
+  await store.createFn("unpublished", src(`export default () => "hi";`), { publish: false });
+  await registry.load("unpublished");
+  const res = await req("/unpublished");
+  assertEquals(res.status, 409);
+  const body = await res.json();
+  assertEquals(body.error, "no_live_version");
+  assert(body.hint.includes("/versions"));
+});
+
+Deno.test("the draft can be invoked without publishing it", async () => {
+  const res = await req("/__/api/functions/unpublished/invoke", {
+    headers: { "x-lambdock-target": "draft" },
+  });
+  assertEquals(res.status, 200);
+  assertEquals(await res.text(), "hi");
+  assertEquals(res.headers.get("x-lambdock-target"), "draft");
+});
+
+Deno.test("publishing keeps the draft that was saved last", async () => {
+  await store.writeSource("greet", src(`export default () => "v3";`));
+  const res = await api("/functions/greet/versions", {
+    method: "POST",
+    body: JSON.stringify({ note: "third" }),
+  });
+  assertEquals(res.status, 201);
+  const body = await res.json();
+  assertEquals(body.version.version, 3);
+  assertEquals(body.version.note, "third");
+  assertEquals(await (await req("/greet/x")).text(), "v3");
+});
+
+Deno.test("failing tests block a version, force publishes anyway", async () => {
+  await store.createFn("gated", src(`export default () => "ok";`));
+  await store.writeSource("gated", src(`export default () => "changed";`));
+  await store.writeTests(
+    "gated",
+    `import { assertEquals } from "jsr:@std/assert@^1.0.10";
+Deno.test("fails on purpose", () => assertEquals(1, 2));
+`,
+  );
+
+  const blocked = await api("/functions/gated/versions", { method: "POST", body: "{}" });
+  assertEquals(blocked.status, 422);
+  assertEquals((await blocked.json()).error, "tests_failed");
+  assertEquals(await (await req("/gated")).text(), "ok");
+
+  const forced = await api("/functions/gated/versions", {
+    method: "POST",
+    body: JSON.stringify({ force: true }),
+  });
+  assertEquals(forced.status, 201);
+  assertEquals((await forced.json()).version.tests, "forced");
+  assertEquals(await (await req("/gated")).text(), "changed");
+});
+
+Deno.test("passing tests let a version through", async () => {
+  await store.writeSource("gated", src(`export default () => "green";`));
+  await store.writeTests(
+    "gated",
+    `import { assertEquals } from "jsr:@std/assert@^1.0.10";
+import handler from "./handler.ts";
+import { callFn } from "../../lambdock.ts";
+Deno.test("says green", async () => {
+  assertEquals(await (await callFn(handler, "/")).text(), "green");
+});
+`,
+  );
+  const res = await api("/functions/gated/versions", { method: "POST", body: "{}" });
+  assertEquals(res.status, 201);
+  const body = await res.json();
+  assertEquals(body.version.tests, "passed");
+  assertEquals(body.tests.passed, 1);
+  assertEquals(await (await req("/gated")).text(), "green");
+});
+
+Deno.test("a version snapshot is not a function", async () => {
+  assertEquals((await store.listSlugs()).includes("greet@1"), false);
+  assertEquals((await req("/greet@1")).status, 404);
+});
+
+Deno.test("the version list reports what is live", async () => {
+  const body = await (await api("/functions/greet/versions")).json();
+  assertEquals(body.liveVersion, 3);
+  assertEquals(body.versions.map((v: { version: number }) => v.version), [1, 2, 3]);
+  assertEquals(body.draftAhead, false);
 });
 
 Deno.test("return values are coerced", async () => {

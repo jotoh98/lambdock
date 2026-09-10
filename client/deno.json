@@ -1,0 +1,22 @@
+{
+  "name": "@lambdock/client",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./cli": "./cli.ts"
+  },
+  "tasks": {
+    "cli": "deno run --allow-net --allow-read --allow-write --allow-env cli.ts",
+    "install": "deno install --global --force --allow-net --allow-read --allow-write --allow-env --name lambdock cli.ts",
+    "test": "deno test --allow-net --allow-read --allow-write --allow-env --allow-run --unstable-kv",
+    "check": "deno check mod.ts cli.ts flags.ts scripts/build.ts",
+    "compile": "deno compile --allow-net --allow-read --allow-write --allow-env --output dist/lambdock cli.ts",
+    "compile:all": "deno run --allow-run --allow-read --allow-write scripts/build.ts"
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@^1.0.10"
+  },
+  "fmt": {
+    "lineWidth": 100
+  }
+}

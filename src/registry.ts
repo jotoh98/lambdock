@@ -10,10 +10,20 @@ export interface CompiledRoute {
   pattern: URLPattern;
 }
 
+/** What a loaded module was read from. */
+export type Target = "draft" | "live" | number;
+
 export interface FnEntry {
   slug: string;
   meta: store.FnMeta;
+  /** Module cache key: modification time of the file that was imported. */
   version: number;
+  /** Version this entry runs. `null` means it is the draft. */
+  liveVersion: number | null;
+  /** `meta.json` modification time. Tells the live entry when to reload. */
+  metaVersion: number;
+  /** False when no version is published. Requests are then refused. */
+  live: boolean;
   routes: CompiledRoute[];
   handler: Handler | null;
   timeoutMs: number;
@@ -22,7 +32,10 @@ export interface FnEntry {
   error: string | null;
 }
 
+/** Live entries, one per function. */
 const entries = new Map<string, FnEntry>();
+/** Draft and old-version entries, used by the admin API only. */
+const previews = new Map<string, FnEntry>();
 
 const DEFAULT_ROUTES: RouteDef[] = [{ method: "*", path: "/*" }];
 
@@ -45,17 +58,25 @@ function errorText(e: unknown): string {
   return String(e);
 }
 
-/** Loads or reloads one function. The module cache key is the file modification time. */
-export async function load(slug: string): Promise<FnEntry> {
-  const meta = await store.readMeta(slug);
-  const version = await store.sourceVersion(slug);
-  const url = toFileUrl(paths.handler(slug));
-  url.searchParams.set("v", String(version));
+/** Imports one handler file and reads its exported configuration. */
+async function build(
+  slug: string,
+  meta: store.FnMeta,
+  file: string,
+  mtime: number,
+  liveVersion: number | null,
+  live: boolean,
+): Promise<FnEntry> {
+  const url = toFileUrl(file);
+  url.searchParams.set("v", String(mtime));
 
   const entry: FnEntry = {
     slug,
     meta,
-    version,
+    version: mtime,
+    liveVersion,
+    metaVersion: await store.metaVersion(slug),
+    live,
     routes: compileRoutes(DEFAULT_ROUTES),
     handler: null,
     timeoutMs: config.defaultTimeoutMs,
@@ -74,17 +95,40 @@ export async function load(slug: string): Promise<FnEntry> {
     entry.routes = compileRoutes(cfg.routes?.length ? cfg.routes : DEFAULT_ROUTES);
     entry.timeoutMs = cfg.timeoutMs ?? config.defaultTimeoutMs;
     entry.description = cfg.description ?? "";
-    logs.system(slug, `loaded (${entry.routes.length} route(s))`);
   } catch (e) {
     entry.error = errorText(e);
-    logs.system(slug, `load failed: ${entry.error.split("\n")[0]}`);
   }
+  return entry;
+}
+
+/**
+ * Loads or reloads the live entry of one function.
+ * With no published version it loads the draft, so the editor still sees the
+ * routes, and marks the entry `live: false` so requests are refused.
+ */
+export async function load(slug: string): Promise<FnEntry> {
+  const meta = await store.readMeta(slug);
+  const v = meta.liveVersion;
+  const entry = v === null
+    ? await build(slug, meta, paths.handler(slug), await store.sourceVersion(slug), null, false)
+    : await build(
+      slug,
+      meta,
+      paths.versionHandler(slug, v),
+      await store.versionMtime(slug, v),
+      v,
+      true,
+    );
+
+  const what = v === null ? "draft (no version published)" : `v${v}`;
+  if (entry.error) logs.system(slug, `load failed for ${what}: ${entry.error.split("\n")[0]}`);
+  else logs.system(slug, `loaded ${what} (${entry.routes.length} route(s))`);
 
   entries.set(slug, entry);
   return entry;
 }
 
-/** Returns the entry, and reloads it when the file changed on disk. */
+/** Returns the live entry, and reloads it when the selection or the file changed. */
 export async function get(slug: string): Promise<FnEntry | null> {
   if (!(await store.hasFn(slug))) {
     entries.delete(slug);
@@ -92,10 +136,46 @@ export async function get(slug: string): Promise<FnEntry | null> {
   }
   const cached = entries.get(slug);
   if (cached) {
-    const version = await store.sourceVersion(slug);
-    if (version === cached.version) return cached;
+    const metaVersion = await store.metaVersion(slug);
+    if (metaVersion === cached.metaVersion) {
+      // A draft-only entry follows the draft file, so an external edit is picked up.
+      if (cached.liveVersion !== null) return cached;
+      if ((await store.sourceVersion(slug)) === cached.version) return cached;
+    }
   }
   return await load(slug);
+}
+
+/**
+ * Loads the draft or one published version, for the admin API.
+ * These entries never answer a public request.
+ */
+export async function loadTarget(slug: string, target: Target): Promise<FnEntry> {
+  const meta = await store.readMeta(slug);
+  if (target === "live") {
+    if (meta.liveVersion === null) throw new Deno.errors.NotFound("No version is published.");
+    target = meta.liveVersion;
+  }
+  const isDraft = target === "draft";
+  const file = isDraft ? paths.handler(slug) : paths.versionHandler(slug, target as number);
+  const mtime = isDraft
+    ? await store.sourceVersion(slug)
+    : await store.versionMtime(slug, target as number);
+
+  const key = `${slug}@${target}`;
+  const cached = previews.get(key);
+  if (cached && cached.version === mtime) return cached;
+
+  const entry = await build(
+    slug,
+    meta,
+    file,
+    mtime,
+    isDraft ? null : target as number,
+    false,
+  );
+  previews.set(key, entry);
+  return entry;
 }
 
 export function peek(slug: string): FnEntry | undefined {
@@ -108,10 +188,14 @@ export function all(): FnEntry[] {
 
 export function forget(slug: string) {
   entries.delete(slug);
+  for (const key of previews.keys()) {
+    if (key.startsWith(`${slug}@`)) previews.delete(key);
+  }
 }
 
 export async function loadAll() {
   entries.clear();
+  previews.clear();
   for (const slug of await store.listSlugs()) await load(slug);
 }
 

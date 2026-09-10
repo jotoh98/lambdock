@@ -23,12 +23,16 @@ export function installCrashGuard() {
   });
 }
 
-/** Reads the function slug from a stack trace that points into the data directory. */
+/**
+ * Reads the function slug from a stack trace that points into the data directory.
+ * A frame inside a version snapshot (`<slug>@3/handler.ts`) names the function.
+ */
 export function slugFromStack(stack: string): string | null {
   const dir = toFileUrl(paths.functions()).href + "/";
   const at = stack.indexOf(dir);
   if (at === -1) return null;
-  const slug = stack.slice(at + dir.length).split(/[/?#\s)]/)[0];
+  const name = stack.slice(at + dir.length).split(/[/?#\s)]/)[0];
+  const slug = name.split("@")[0];
   return slug || null;
 }
 
