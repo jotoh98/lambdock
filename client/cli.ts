@@ -77,9 +77,10 @@ const [command, ...rest] = flags._;
 const str = (name: string) => flags[name] as string | undefined;
 const bool = (name: string) => flags[name] === true;
 
-if (flags.help || !command) {
+if (flags.help || command === "help" || !command) {
   console.log(HELP);
-  Deno.exit(command ? 0 : 1);
+  // Asking for help succeeded. Giving no command at all did not.
+  Deno.exit(command || flags.help ? 0 : 1);
 }
 
 const lam = new Lambdock({ url: str("url") });

@@ -212,3 +212,42 @@ Deno.test("cleanup", async () => {
   await Deno.remove(dataDir, { recursive: true });
   await Deno.remove(workDir, { recursive: true });
 });
+
+/* The CLI itself: only the paths that do not need a server. */
+
+const CLI = new URL("./cli.ts", import.meta.url).pathname;
+
+async function cli(args: string[]): Promise<{ code: number; out: string }> {
+  const res = await new Deno.Command(Deno.execPath(), {
+    args: ["run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", CLI, ...args],
+    stdout: "piped",
+    stderr: "piped",
+    env: { NO_COLOR: "1" },
+  }).output();
+  const dec = new TextDecoder();
+  return { code: res.code, out: dec.decode(res.stdout) + dec.decode(res.stderr) };
+}
+
+Deno.test("--help succeeds", async () => {
+  const r = await cli(["--help"]);
+  assertEquals(r.code, 0);
+  assert(r.out.includes("lambdock <command>"));
+});
+
+Deno.test("no command prints the help and fails", async () => {
+  const r = await cli([]);
+  assertEquals(r.code, 1);
+  assert(r.out.includes("lambdock <command>"));
+});
+
+Deno.test("an unknown command fails and says so", async () => {
+  const r = await cli(["frobnicate"]);
+  assertEquals(r.code, 1);
+  assert(r.out.includes("unknown command"), r.out);
+});
+
+Deno.test("a command without its argument fails", async () => {
+  const r = await cli(["show"]);
+  assertEquals(r.code, 1);
+  assert(r.out.includes("slug is required"), r.out);
+});
