@@ -28,21 +28,25 @@ export const config = {
  */
 const versionSlug = (slug: string, version: number) => `${slug}@${version}`;
 
+/** The language of a function. It is the extension of its handler and test files. */
+export type Lang = "ts" | "tsx";
+
+export const LANGS: readonly Lang[] = ["ts", "tsx"];
+
+export const handlerName = (lang: Lang) => `handler.${lang}`;
+export const testsName = (lang: Lang) => `handler.test.${lang}`;
+
 export const paths = {
   functions: () => resolve(config.dataDir, "functions"),
   fnDir: (slug: string) => resolve(config.dataDir, "functions", slug),
-  handler: (slug: string) => resolve(config.dataDir, "functions", slug, "handler.ts"),
-  tests: (slug: string) => resolve(config.dataDir, "functions", slug, "handler.test.ts"),
   meta: (slug: string) => resolve(config.dataDir, "functions", slug, "meta.json"),
   versionDir: (slug: string, v: number) =>
     resolve(config.dataDir, "functions", versionSlug(slug, v)),
-  versionHandler: (slug: string, v: number) =>
-    resolve(config.dataDir, "functions", versionSlug(slug, v), "handler.ts"),
-  versionTests: (slug: string, v: number) =>
-    resolve(config.dataDir, "functions", versionSlug(slug, v), "handler.test.ts"),
   envFile: () => resolve(config.dataDir, "env.json"),
   kvFile: () => resolve(config.dataDir, "kv.sqlite"),
   typesFile: () => resolve(config.dataDir, "lambdock.ts"),
+  /** No extension: `@jsxImportSource ../../jsx` resolves to exactly this path. */
+  jsxRuntime: () => resolve(config.dataDir, "jsx", "jsx-runtime"),
 };
 
 /** True for a directory that holds a version snapshot, not a function. */

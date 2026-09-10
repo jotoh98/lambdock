@@ -22,6 +22,9 @@
     /** Text of both draft files, and the text the server holds. */
     buffers: { handler: "", tests: "" },
     savedBuffers: { handler: "", tests: "" },
+    /** Language of the draft: "ts" or "tsx". It is the file extension. */
+    lang: "ts",
+    savedLang: "ts",
     /** Last `deno test` run of this function. */
     testRun: null,
     versions: null,
@@ -106,7 +109,9 @@
   /* ---------------- editor ---------------- */
 
   let editor = null;
+  let langConf = null;
   const fallback = $("fallback");
+  const PRAGMA = "/** @jsxImportSource ../../jsx */\n";
 
   function initEditor() {
     if (!globalThis.CM) {
@@ -114,11 +119,12 @@
       fallback.addEventListener("input", markDirty);
       return;
     }
+    langConf = new CM.Compartment();
     editor = new CM.EditorView({
       doc: "",
       extensions: [
         CM.basicSetup,
-        CM.javascript({ typescript: true }),
+        langConf.of(CM.javascript({ typescript: true })),
         CM.oneDark,
         CM.keymap.of([CM.indentWithTab]),
         CM.EditorView.updateListener.of((u) => {
@@ -159,10 +165,42 @@
     setDirty(isDirty());
   }
 
+  /** Shows the language in the file tabs, the select and the editor mode. */
+  function renderLang() {
+    const [handler, tests] = $("fileTabs").querySelectorAll("button");
+    handler.textContent = `handler.${state.lang}`;
+    tests.textContent = `handler.test.${state.lang}`;
+    $("selLang").value = state.lang;
+    if (editor) {
+      editor.dispatch({
+        effects: langConf.reconfigure(
+          CM.javascript({ typescript: true, jsx: state.lang === "tsx" }),
+        ),
+      });
+    }
+  }
+
+  /** Switches the draft language. The JSX pragma and the test import change with it. */
+  function changeLang(lang) {
+    stash();
+    const b = state.buffers;
+    if (lang === "tsx") {
+      if (!b.handler.includes("@jsxImportSource")) b.handler = PRAGMA + b.handler;
+      b.tests = b.tests.replaceAll('"./handler.ts"', '"./handler.tsx"');
+    } else {
+      if (b.handler.startsWith(PRAGMA)) b.handler = b.handler.slice(PRAGMA.length);
+      b.tests = b.tests.replaceAll('"./handler.tsx"', '"./handler.ts"');
+    }
+    state.lang = lang;
+    renderLang();
+    showFile(state.file, false);
+  }
+
   function isDirty() {
     if (!state.slug) return false;
     const now = { ...state.buffers, [state.file]: getSource() };
-    return now.handler !== state.savedBuffers.handler ||
+    return state.lang !== state.savedLang ||
+      now.handler !== state.savedBuffers.handler ||
       now.tests !== state.savedBuffers.tests;
   }
 
@@ -209,6 +247,7 @@
     $("btnRename").disabled = !f;
     $("btnDelete").disabled = !f;
     $("btnPublish").disabled = !f;
+    $("selLang").disabled = !f;
     $("chkEnabled").disabled = !f;
     $("chkEnabled").checked = f ? f.enabled : false;
     const badge = $("probBadge");
@@ -298,8 +337,8 @@
         <button id="tRun" class="primary">Run tests</button>
         <span class="hint">${
         testsText.trim()
-          ? "handler.test.ts runs against the saved draft."
-          : "This function has no tests. Write them in handler.test.ts."
+          ? `handler.test.${state.lang} runs against the saved draft.`
+          : `This function has no tests. Write them in handler.test.${state.lang}.`
       }</span>
       </div>`;
       let out = '<div class="empty">Not run yet.</div>';
@@ -512,6 +551,8 @@
     if (i >= 0) state.functions[i] = { ...state.functions[i], ...data };
     state.buffers = { handler: data.source, tests: data.tests ?? "" };
     state.savedBuffers = { ...state.buffers };
+    state.lang = state.savedLang = data.lang ?? "ts";
+    renderLang();
     showFile("handler", false);
     $("status").textContent = "";
     $("status").className = "status";
@@ -530,11 +571,13 @@
       const data = await api("/functions/" + encodeURIComponent(state.slug), {
         method: "PUT",
         body: JSON.stringify({
+          lang: state.lang,
           source: state.buffers.handler,
           tests: state.buffers.tests.trim() ? state.buffers.tests : null,
         }),
       });
       state.savedBuffers = { ...state.buffers };
+      state.savedLang = state.lang;
       state.testRun = null;
       setDirty(false);
       state.problems = data.check?.ok === false ? data.check.output : "";
@@ -673,19 +716,29 @@
   }
 
   async function createFn() {
-    const slug = await dialog({
+    const input = await dialog({
       title: "New function",
       body:
         `<p class="hint">Lowercase letters, digits and "-". It becomes the first path segment.</p>
-      <input id="newSlug" placeholder="my-function" style="width:100%" spellcheck="false">`,
+      <input id="newSlug" placeholder="my-function" style="width:100%" spellcheck="false">
+      <div class="field" style="margin-top:10px"><label>Language</label>
+      <select id="newLang" style="width:100%">
+        <option value="ts">TypeScript: handler.ts</option>
+        <option value="tsx">TSX, JSX becomes HTML: handler.tsx</option>
+      </select></div>`,
       actions: [
         { label: "Cancel", value: null },
-        { label: "Create", kind: "primary", value: () => $("newSlug").value.trim() },
+        {
+          label: "Create",
+          kind: "primary",
+          value: () => ({ slug: $("newSlug").value.trim(), lang: $("newLang").value }),
+        },
       ],
     });
+    const slug = input?.slug;
     if (!slug) return;
     try {
-      await api("/functions", { method: "POST", body: JSON.stringify({ slug }) });
+      await api("/functions", { method: "POST", body: JSON.stringify(input) });
       await refresh();
       await open(slug);
       toast(`created /${slug}`);
@@ -820,7 +873,9 @@ export default async function handler(req: Request, ctx: Ctx) {
   return { ok: true }; // plain values become JSON
 }</pre>
 <p class="hint" style="margin-top:10px">Return a <code>Response</code> for full control. A string becomes text,
-<code>null</code> becomes 204, anything else becomes JSON. <code>console.log</code> appears in the Logs tab.</p>`,
+<code>null</code> becomes 204, anything else becomes JSON. <code>console.log</code> appears in the Logs tab.</p>
+<p class="hint" style="margin-top:10px">Select <b>TSX</b> in the toolbar to write JSX. A JSX element that you return
+becomes HTML. The first line <code>/** @jsxImportSource ../../jsx */</code> selects the built-in runtime.</p>`,
       actions: [{ label: "Close", kind: "primary", value: true }],
     });
   }
@@ -871,6 +926,7 @@ export default async function handler(req: Request, ctx: Ctx) {
   $("btnSave").onclick = save;
   $("btnPublish").onclick = publish;
   $("btnNew").onclick = createFn;
+  $("selLang").onchange = (e) => changeLang(e.target.value);
   for (const b of $("fileTabs").querySelectorAll("button")) {
     b.onclick = () => showFile(b.dataset.file);
   }

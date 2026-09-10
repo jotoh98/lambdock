@@ -1,4 +1,5 @@
-import { config, paths } from "./config.ts";
+import { config } from "./config.ts";
+import { filesOf } from "./store.ts";
 
 export interface CheckResult {
   ok: boolean;
@@ -47,11 +48,11 @@ export async function checkFile(file: string): Promise<CheckResult> {
 }
 
 /** Checks the draft of a function. */
-export function checkFunction(slug: string): Promise<CheckResult> {
-  return checkFile(paths.handler(slug));
+export async function checkFunction(slug: string): Promise<CheckResult> {
+  return await checkFile((await filesOf(slug)).handler);
 }
 
 /** Checks one published version. */
-export function checkVersion(slug: string, version: number): Promise<CheckResult> {
-  return checkFile(paths.versionHandler(slug, version));
+export async function checkVersion(slug: string, version: number): Promise<CheckResult> {
+  return await checkFile((await filesOf(slug, version)).handler);
 }

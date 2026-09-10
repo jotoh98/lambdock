@@ -1,5 +1,5 @@
 import { toFileUrl } from "@std/path";
-import { config, paths } from "./config.ts";
+import { config } from "./config.ts";
 import * as store from "./store.ts";
 import * as logs from "./logs.ts";
 import type { FnConfig, Handler, RouteDef } from "../templates/lambdock.ts";
@@ -109,16 +109,10 @@ async function build(
 export async function load(slug: string): Promise<FnEntry> {
   const meta = await store.readMeta(slug);
   const v = meta.liveVersion;
+  const file = (await store.filesOf(slug, v ?? undefined)).handler;
   const entry = v === null
-    ? await build(slug, meta, paths.handler(slug), await store.sourceVersion(slug), null, false)
-    : await build(
-      slug,
-      meta,
-      paths.versionHandler(slug, v),
-      await store.versionMtime(slug, v),
-      v,
-      true,
-    );
+    ? await build(slug, meta, file, await store.sourceVersion(slug), null, false)
+    : await build(slug, meta, file, await store.versionMtime(slug, v), v, true);
 
   const what = v === null ? "draft (no version published)" : `v${v}`;
   if (entry.error) logs.system(slug, `load failed for ${what}: ${entry.error.split("\n")[0]}`);
@@ -157,7 +151,7 @@ export async function loadTarget(slug: string, target: Target): Promise<FnEntry>
     target = meta.liveVersion;
   }
   const isDraft = target === "draft";
-  const file = isDraft ? paths.handler(slug) : paths.versionHandler(slug, target as number);
+  const file = (await store.filesOf(slug, isDraft ? undefined : target as number)).handler;
   const mtime = isDraft
     ? await store.sourceVersion(slug)
     : await store.versionMtime(slug, target as number);

@@ -86,11 +86,16 @@ lambdock logs hello --follow
 | `rm <slug>`              | Delete the function, every version and its stored data  |
 | `env [KEY=value]`        | Read or set the shared environment                      |
 
-Flags: `--url`, `--file`, `--tests`, `--dir`, `--target`, `--version`, `--note`, `--force`,
-`--json`, `--yes`, `-X`, `-d`, `-H`, `--follow`.
+Flags: `--url`, `--file`, `--tests`, `--lang`, `--dir`, `--target`, `--version`, `--note`,
+`--force`, `--json`, `--yes`, `-X`, `-d`, `-H`, `--follow`.
 
-`push` and `deploy` look for the source in `<slug>/handler.ts`, then `<slug>.ts`, then `handler.ts`.
-A `handler.test.ts` next to it is sent as well. `--file` overrides the search.
+`push` and `deploy` look for the source in `<slug>/handler.tsx`, `<slug>/handler.ts`, `<slug>.tsx`,
+`<slug>.ts`, `handler.tsx`, then `handler.ts`. A test file next to it with the same extension
+(`handler.test.ts` or `handler.test.tsx`) is sent as well. `--file` overrides the search.
+
+The extension sets the language of the function. `--lang ts` or `--lang tsx` overrides it, and
+`new <slug> --lang tsx` starts from the TSX template. `pull` writes `handler.tsx` for a TSX
+function, and removes a `handler.ts` of the other language from the directory.
 
 `--target` selects what `invoke`, `check` and `test` run: `draft` (the default), `live`, or a
 version number.

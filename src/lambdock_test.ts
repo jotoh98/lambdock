@@ -289,6 +289,95 @@ Deno.test("a stack trace names the function it came from", () => {
   assertEquals(slugFromStack("at file:///src/main.ts:1:1"), null);
 });
 
+const tsx = (body: string) =>
+  `/** @jsxImportSource ../../jsx */\nimport type { Ctx } from "../../lambdock.ts";\n${body}\n`;
+
+Deno.test("a handler.tsx renders JSX to HTML", async () => {
+  await store.createFn(
+    "page",
+    tsx(`function Item(p: { name: string }) {
+  return <li className="item">{p.name}</li>;
+}
+export default (_r: Request, c: Ctx) => (
+  <html>
+    <body>
+      <ul>{["a<b", "c"].map((n) => <Item name={n} />)}</ul>
+      <input disabled value={c.url.searchParams.get("q") ?? ""} hidden={false} />
+      <>{null}{false}{0}</>
+    </body>
+  </html>
+);`),
+    { lang: "tsx" },
+  );
+  await registry.load("page");
+  const res = await req('/page?q="x"');
+  assertEquals(res.headers.get("content-type"), "text/html; charset=utf-8");
+  assertEquals(
+    await res.text(),
+    '<!doctype html><html><body><ul><li class="item">a&lt;b</li><li class="item">c</li></ul>' +
+      '<input disabled value="&quot;x&quot;">0</body></html>',
+  );
+});
+
+Deno.test("a save can switch the language, and each version keeps its own", async () => {
+  await store.createFn("switch", src(`export default () => "ts";`), {
+    tests: `Deno.test("runs", () => {});\n`,
+  });
+  const saved = await api("/functions/switch", {
+    method: "PUT",
+    body: JSON.stringify({ lang: "tsx", source: tsx(`export default () => <b>tsx</b>;`) }),
+  });
+  assertEquals(saved.status, 200);
+  assertEquals((await saved.json()).lang, "tsx");
+
+  const files = await store.filesOf("switch");
+  assertEquals(files.lang, "tsx");
+  assert(files.tests.endsWith("handler.test.tsx"));
+  assertEquals(await store.readTests("switch"), `Deno.test("runs", () => {});\n`);
+  assertEquals(await store.hasFn("switch"), true);
+  assertEquals(await (await req("/switch")).text(), "ts");
+  assert(await store.draftIsAhead("switch"));
+
+  const published = await api("/functions/switch/versions", { method: "POST", body: "{}" });
+  assertEquals(published.status, 201);
+  assertEquals(await (await req("/switch")).text(), "<b>tsx</b>");
+  assertEquals((await (await api("/functions/switch/versions/2")).json()).lang, "tsx");
+  assertEquals((await (await api("/functions/switch/versions/1")).json()).lang, "ts");
+
+  await api("/functions/switch/live", { method: "POST", body: JSON.stringify({ version: 1 }) });
+  assertEquals(await (await req("/switch")).text(), "ts");
+  assert(await store.draftIsAhead("switch"));
+});
+
+Deno.test("an unknown language is refused", async () => {
+  const res = await api("/functions", {
+    method: "POST",
+    body: JSON.stringify({ slug: "jsx-fn", lang: "jsx" }),
+  });
+  assertEquals(res.status, 400);
+  assertEquals(await store.hasFn("jsx-fn"), false);
+});
+
+Deno.test("a handler.test.tsx gates a version of a handler.tsx", async () => {
+  await store.createFn("tsxgate", tsx(`export default () => <p>one</p>;`), {
+    lang: "tsx",
+    publish: false,
+    tests: `/** @jsxImportSource ../../jsx */
+import { assertEquals } from "jsr:@std/assert@^1.0.10";
+import { callFn } from "../../lambdock.ts";
+import handler from "./handler.tsx";
+Deno.test("renders", async () => {
+  assertEquals(await (await callFn(handler, "/")).text(), String(<p>one</p>));
+});
+`,
+  });
+  const res = await api("/functions/tsxgate/versions", { method: "POST", body: "{}" });
+  const body = await res.json();
+  assertEquals(res.status, 201, JSON.stringify(body.tests));
+  assertEquals(body.version.tests, "passed");
+  assertEquals(await (await req("/tsxgate")).text(), "<p>one</p>");
+});
+
 Deno.test("cleanup", () => {
   closeKv();
   Deno.removeSync(tmp, { recursive: true });

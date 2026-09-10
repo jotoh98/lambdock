@@ -14,6 +14,7 @@ one port. The files stay on disk, so a reboot does not remove them.
 | ---------------------- | -------------------------------------------------------------------------------------- |
 | **One host, one port** | Every function is mounted below `/<name>`. Routes cannot collide.                      |
 | **Path parameters**    | The standard `:param`, `:param?` and `*` format, from the built-in `URLPattern`.       |
+| **TSX pages**          | A `handler.tsx` returns JSX. The built-in runtime renders it to HTML.                  |
 | **Interactive editor** | CodeMirror with TypeScript highlighting, a request tester, live logs and `deno check`. |
 | **Draft and versions** | A save cannot break a live route. `deno check` and your tests gate each new version.   |
 | **Tests on the draft** | `handler.test.ts` runs against what you saved, before it can go live.                  |
@@ -59,7 +60,7 @@ deno task dev
 
 Deno 2.4 or later is necessary.
 
-The first start writes three example functions into `./data`.
+The first start writes four example functions into `./data`. One of them, `page`, is a TSX page.
 
 ## How the URLs work
 
@@ -161,6 +162,7 @@ builds has an in-memory `ctx.kv`, so a test never touches stored data.
 | ----------------- | ------------------------ |
 | `Response`        | that response, unchanged |
 | `string`          | 200, `text/plain`        |
+| a JSX element     | 200, `text/html`         |
 | `null` or nothing | 204                      |
 | anything else     | 200, `application/json`  |
 
@@ -194,6 +196,7 @@ Open `/__/` .
 
 The pill next to the name says what answers a request: `live v3`, `live v3 · draft ahead`, or
 `no version`. The two buttons above the editor switch between `handler.ts` and `handler.test.ts`.
+The **TS** / **TSX** select changes the language of the draft. The save renames both files.
 
 `Cmd`/`Ctrl` + `S` saves the draft. `Cmd`/`Ctrl` + `Enter` publishes it.
 
@@ -206,8 +209,8 @@ function.
 data/
 ├── functions/
 │   ├── hello/
-│   │   ├── handler.ts        the draft
-│   │   ├── handler.test.ts   the tests of the draft
+│   │   ├── handler.ts        the draft (handler.tsx for a TSX function)
+│   │   ├── handler.test.ts   the tests of the draft (handler.test.tsx)
 │   │   └── meta.json         name, enabled, liveVersion, version history
 │   ├── hello@1/              version 1, immutable
 │   │   ├── handler.ts
@@ -215,6 +218,7 @@ data/
 │   └── hello@2/              version 2, immutable
 │       └── handler.ts
 ├── env.json                  shared environment variables
+├── jsx/jsx-runtime           the JSX runtime (written at each start)
 ├── kv.sqlite                 ctx.kv data of all functions
 └── lambdock.ts               the type contract (written at each start)
 ```

@@ -1,7 +1,7 @@
 # Write a function
 
-A function is one TypeScript module at `data/functions/<name>/handler.ts`. It must have a default
-export that is a function.
+A function is one TypeScript module at `data/functions/<name>/handler.ts`, or `handler.tsx` when it
+uses [JSX](#jsx). It must have a default export that is a function.
 
 The smallest function:
 
@@ -163,6 +163,7 @@ Or return a plain value, and lambdock makes the response:
 | You return                             | Status | Content type                |
 | -------------------------------------- | ------ | --------------------------- |
 | `string`                               | 200    | `text/plain; charset=utf-8` |
+| a JSX element, `raw(html)`             | 200    | `text/html; charset=utf-8`  |
 | `null`, `undefined`                    | 204    | —                           |
 | `Uint8Array`, `Blob`, `ReadableStream` | 200    | —                           |
 | any other value                        | 200    | `application/json`          |
@@ -174,6 +175,61 @@ x-lambdock-function: notes
 x-lambdock-request-id: 3f9a1c02
 x-lambdock-duration-ms: 4
 ```
+
+## JSX
+
+Name the file `handler.tsx` to write JSX. In the editor, select **TSX** in the toolbar. With the
+client, push a `handler.tsx`, or give `--lang tsx`.
+
+The first line selects the runtime that lambdock includes:
+
+```tsx
+/** @jsxImportSource ../../jsx */
+import type { Ctx } from "../../lambdock.ts";
+
+function Layout(props: { title: string; children?: unknown }) {
+  return (
+    <html>
+      <head>
+        <title>{props.title}</title>
+      </head>
+      <body>{props.children}</body>
+    </html>
+  );
+}
+
+export default (_req: Request, ctx: Ctx) => (
+  <Layout title="Hello">
+    <h1 className="big">Hello {ctx.params.name ?? "world"}</h1>
+  </Layout>
+);
+```
+
+A JSX element that you return becomes `200 text/html`. When the root element is `<html>`, the
+response starts with `<!doctype html>`.
+
+The runtime renders to a string at once. There is no virtual DOM, no hooks and no code in the
+browser.
+
+| Rule           | Detail                                                                              |
+| -------------- | ----------------------------------------------------------------------------------- |
+| Text           | Escaped. `{"<b>"}` gives `&lt;b&gt;`                                                |
+| `raw(html)`    | From `../../lambdock.ts`. Inserts HTML that you trust, with no escape               |
+| Attributes     | `className` becomes `class`, `htmlFor` becomes `for`. `true` gives a bare attribute |
+| Empty values   | `false`, `null` and `undefined` remove an attribute or a child                      |
+| `style`        | A string, or an object: `{ fontSize: "2rem" }` gives `font-size:2rem`               |
+| Components     | Synchronous functions. Load data in the handler with `await`, then give it as props |
+| Event handlers | Removed. Nothing runs in the browser                                                |
+
+`data/jsx/jsx-runtime` is written at each server start, like `data/lambdock.ts`. Do not edit it. It
+has no file extension, because Deno adds `/jsx-runtime` to the pragma path and adds no extension.
+
+Without the pragma, Deno uses the classic React transform, and the check fails with
+`This JSX tag requires 'React' to be in scope`. The editor adds the line when you select TSX.
+
+The tests of a TSX function are in `handler.test.tsx`, and they import `./handler.tsx`. A save with
+a new language renames both files. The editor also changes the import in the tests. With the client
+or the API, change it yourself.
 
 ## Storage
 
